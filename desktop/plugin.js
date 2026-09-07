@@ -20,7 +20,37 @@ const textPrimary = { color: 'var(--ui-text-primary)' }
 const textSecondary = { color: 'var(--ui-text-secondary)' }
 const textTertiary = { color: 'var(--ui-text-tertiary)' }
 const textQuaternary = { color: 'var(--ui-text-quaternary)' }
-let lastFocusedProvider = ''
+const lastFocusedProviders = new Map()
+
+function profileScope(profile) {
+  const value = String(profile || '').trim()
+  return value || '__active__'
+}
+
+function rememberedProvider(profile) {
+  return lastFocusedProviders.get(profileScope(profile)) || ''
+}
+
+function providerScopeKey(profile, sessionId) {
+  return `${profileScope(profile)}::${String(sessionId || '__workspace__')}`
+}
+
+function providerUsageQueryKey(profile, sessionId, provider, model, gateway) {
+  return [
+    'provider-usage',
+    'overview',
+    profileScope(profile),
+    String(sessionId || ''),
+    provider || '',
+    model || '',
+    gateway || ''
+  ]
+}
+
+function gatewayReady(gateway) {
+  const state = String(gateway || '').toLowerCase()
+  return !state || state === 'open' || state === 'connected' || state === 'ready'
+}
 
 function normaliseProvider(value) {
   const text = String(value || '').trim().toLowerCase()
@@ -37,19 +67,26 @@ function payloadFromResponse(response) {
   return response?.payload || response?.result?.payload || response?.result || response?.data || response || {}
 }
 
-function useActiveProvider(sessionId, initialProvider = '') {
-  const [provider, setProvider] = useState(() => lastFocusedProvider || normaliseProvider(initialProvider))
+function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
+  const scope = providerScopeKey(ownerProfile, sessionId)
+  const [state, setState] = useState(() => ({
+    scope,
+    provider: normaliseProvider(initialProvider) || rememberedProvider(ownerProfile)
+  }))
 
   useEffect(() => {
     let alive = true
+    const seed = sessionId ? normaliseProvider(initialProvider) : rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
+    setState({ scope, provider: seed })
     const accept = payload => {
       const statusMatch = typeof payload?.output === 'string'
         ? payload.output.match(/^Model:\s+.*\(([^()]*)\)\s*$/m)
         : null
       const value = payload?.provider || payload?.info?.provider || statusMatch?.[1]
       if (typeof value === 'string' && value.trim() && alive) {
-        lastFocusedProvider = normaliseProvider(value)
-        setProvider(lastFocusedProvider)
+        const resolved = normaliseProvider(value)
+        lastFocusedProviders.set(profileScope(ownerProfile), resolved)
+        setState({ scope, provider: resolved })
       }
     }
 
@@ -74,20 +111,21 @@ function useActiveProvider(sessionId, initialProvider = '') {
       alive = false
       dispose()
     }
-  }, [sessionId])
+  }, [sessionId, ownerProfile, initialProvider, scope])
 
-  return provider
+  return state.scope === scope ? state.provider : ''
 }
 
-function useOverview(ctx, provider, model) {
+function useOverview(ctx, provider, model, ownerProfile, sessionId, gateway) {
   return useQuery({
-    queryKey: ['provider-usage', 'overview', provider || '', model || ''],
+    queryKey: providerUsageQueryKey(ownerProfile, sessionId, provider, model, gateway),
     queryFn: () =>
       ctx.rest('/overview', {
         method: 'POST',
         body: { active_provider: provider || null, active_model: model || null },
         timeoutMs: 25_000
       }),
+    enabled: gatewayReady(gateway),
     staleTime: 15_000,
     refetchInterval: REFRESH_MS,
     retry: 1
@@ -281,7 +319,8 @@ function statusFundingSummary(row, model) {
   return compactFundingSummary(row, model)
 }
 
-function chipDescription(row, model, data) {
+function chipDescription(row, model, data, switching = false) {
+  if (switching) return 'Switching profile. Provider usage will refresh when the connection is ready.'
   const updated = data?.fetched_at ? new Date(data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet'
   if (!row) return `Provider usage. Last updated ${updated}.`
   const modelName = model ? ` Active model ${model}.` : ''
@@ -805,21 +844,27 @@ function openOverview(ctx, initialProvider) {
 function ActiveUsageChip({ ctx }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
-  const provider = useActiveProvider(sessionId)
-  const query = useOverview(ctx, provider, model)
+  const focusedProfile = useValue(host.state.focusedSessionProfile)
+  const profile = useValue(host.state.profile)
+  const gateway = useValue(host.state.gateway)
+  const ownerProfile = focusedProfile || profile || ''
+  const switching = !gatewayReady(gateway)
+  const provider = useActiveProvider(sessionId, '', ownerProfile)
+  const query = useOverview(ctx, provider, model, ownerProfile, sessionId, gateway)
   const row = activeRow(query.data, provider)
   const state = fundingState(row, model)
   const label = row ? compactProviderLabel(row) : 'Usage'
-  const summary = query.isLoading && !row ? 'checking' : row ? statusFundingSummary(row, model) : 'unavailable'
+  const summary = switching ? 'switching' : query.isLoading && !row ? 'checking' : row ? statusFundingSummary(row, model) : 'unavailable'
+  const description = chipDescription(row, model, query.data, switching)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
 
   return jsx(Tip, {
-    label: chipDescription(row, model, query.data),
+    label: description,
     children: jsxs(Button, {
       type: 'button',
       variant: 'ghost',
       size: 'micro',
-      'aria-label': chipDescription(row, model, query.data),
+      'aria-label': description,
       onClick: () => {
         haptic('tap')
         openOverview(ctx, provider || row?.id)
@@ -836,8 +881,14 @@ function ActiveUsageChip({ ctx }) {
 function ProviderUsagePane({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
-  const provider = useActiveProvider(sessionId, initialProvider)
-  const query = useOverview(ctx, provider, model)
+  const storedSessionId = useValue(host.state.focusedStoredSessionId)
+  const focusedProfile = useValue(host.state.focusedSessionProfile)
+  const profile = useValue(host.state.profile)
+  const gateway = useValue(host.state.gateway)
+  const ownerProfile = focusedProfile || profile || ''
+  const switching = !gatewayReady(gateway)
+  const provider = useActiveProvider(sessionId, initialProvider, ownerProfile)
+  const query = useOverview(ctx, provider, model, ownerProfile, storedSessionId || sessionId, gateway)
   const rawRows = Array.isArray(query.data?.providers) ? query.data.providers : []
   const rows = mergeOpenCodeRows(rawRows, provider)
   const selected = activeRow({ ...query.data, providers: rows }, provider)
@@ -875,8 +926,8 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
           })
         ]
       }),
-      query.isLoading && rows.length === 0
-        ? jsx('div', { style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center' }, children: jsx(Loader, { type: 'lemniscate-bloom', label: 'Checking provider accounts', style: { width: 58 } }) })
+      switching || (query.isLoading && rows.length === 0)
+        ? jsx('div', { style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center' }, children: jsx(Loader, { type: 'lemniscate-bloom', label: switching ? 'Switching profile' : 'Checking provider accounts', style: { width: 58 } }) })
         : query.isError && rows.length === 0
           ? jsxs('div', {
               style: { padding: 24, display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12 },
@@ -918,7 +969,7 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   })
 }
 
-export { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, statusFundingSummary }
+export { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, providerScopeKey, providerUsageQueryKey, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

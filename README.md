@@ -20,6 +20,7 @@ These images use sample data, but the pane preview now mirrors the plugin's actu
 - Opens a full Provider Usage pane with the focused provider first.
 - Keeps subscription allowances primary and paid fallback balances secondary.
 - Shows every governing window when a model has more than one limit.
+- Refreshes the pane and status chip against the focused profile and session when switching profiles or bots.
 - Keeps API keys and OAuth credentials in the Python backend.
 - Marks missing data as unavailable instead of filling gaps with guesses.
 

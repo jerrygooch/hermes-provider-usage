@@ -857,7 +857,7 @@ def _inventory() -> list[dict[str, Any]]:
 
 @router.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "plugin": "provider-usage", "version": "0.3.3"}
+    return {"ok": True, "plugin": "provider-usage", "version": "0.3.4"}
 
 
 @router.post("/overview")

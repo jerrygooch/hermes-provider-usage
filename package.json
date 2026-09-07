@@ -1,7 +1,7 @@
 {
   "name": "hermes-provider-usage",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Subscription-aware provider usage and balance plugin for Hermes Desktop",
   "repository": {
     "type": "git",

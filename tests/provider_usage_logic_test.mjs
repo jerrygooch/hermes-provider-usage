@@ -43,7 +43,7 @@ await mod.link(specifier => {
 })
 await mod.evaluate()
 
-const { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, statusFundingSummary } = mod.namespace
+const { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, providerScopeKey, providerUsageQueryKey, statusFundingSummary } = mod.namespace
 const window = (label, remaining) => ({ label, remaining_percent: remaining, used_percent: 100 - remaining })
 const codex = {
   id: 'openai-codex',
@@ -134,4 +134,11 @@ const mergedRows = mergedOpenCode.filter(row => row.id === 'opencode-go' || row.
 if (mergedRows.length !== 1 || mergedRows[0].products.length !== 2) throw new Error('OpenCode product grouping failed')
 if (statusFundingSummary(opencodeGo, 'mimo-v2.5') !== '5h 100% · wk 100%') throw new Error('OpenCode status summary should omit the monthly window')
 if (!compactFundingSummary(opencodeGo, 'mimo-v2.5').includes('mo 85%')) throw new Error('OpenCode detailed summary must retain the monthly window')
+const aliceKey = providerUsageQueryKey('Alice', 'alice-session', 'xai-oauth', 'grok-4.6', 'open')
+const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'chaos-session', 'xai-oauth', 'grok-4.6', 'open')
+const secondBotKey = providerUsageQueryKey('ChaosForge', 'second-bot-session', 'xai-oauth', 'grok-4.6', 'open')
+if (providerScopeKey('Alice', 'alice-session') === providerScopeKey('ChaosForge', 'chaos-session')) throw new Error('Focused provider scopes must differ between Alice and ChaosForge')
+if (JSON.stringify(aliceKey) === JSON.stringify(chaosForgeKey)) throw new Error('Profile-scoped usage keys must not share between Alice and ChaosForge')
+if (JSON.stringify(chaosForgeKey) === JSON.stringify(secondBotKey)) throw new Error('Bot/session-scoped usage keys must not share between focused sessions')
+console.log('profile_scoped_toolbar_query_suite=PASS')
 console.log('resolver_fixture_suite=PASS')
