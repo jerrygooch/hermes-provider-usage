@@ -15,12 +15,15 @@
  */
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
 
-const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || 'C:/Users/jerry/AppData/Local/hermes/hermes-agent'
+// Portable: honor HERMES_AGENT_ROOT, else the standard install location for the
+// current user. Never a hardcoded personal path.
+const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
 // esbuild ships inside hermes-agent's node_modules; import it by absolute path
 // because the harness worktree has no node_modules of its own.
 const esbuildUrl = pathToFileURL(path.join(HERMES_AGENT_ROOT, 'node_modules', 'esbuild', 'lib', 'main.js')).href

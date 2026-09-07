@@ -74,12 +74,28 @@ function providerScopeKey(sourceId, sessionId) {
 // profile) matches that active source; otherwise it is a DIVERGENCE and must
 // fail closed (gate, no fetch/probe), never guessed — a same-profile remote
 // would otherwise show one account's data under another's focus.
-function resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile }) {
+function resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile }) {
   const active = String(activeProfile || '').trim() || 'default'
   const activeSource = activeSourceId(activeConnectionId, active)
   const ownerConnection = String(activeConnectionId || '').trim()
-  // Preferred: the SDK's connection-qualified focus owner.
-  if (focusedOwner && typeof focusedOwner?.profile === 'string') {
+  // Newer SDK publishes the connection-qualified focus owner atom. Authority is
+  // on that atom: an EXPLICIT null means the SDK could not resolve the focused
+  // chat to one owner (ambiguous/unresolved id) and fails closed. Never fall
+  // back to the profile-only ladder in that case — doing so could fetch a
+  // foreign account (or serve one account's data) under the focused chat's
+  // ambiguous name.
+  if (hasFocusedOwner) {
+    if (!focusedOwner || typeof focusedOwner?.profile !== 'string') {
+      const focus = String(focusedProfile || '').trim() || active
+      return {
+        fetchProfile: active,
+        focusProfile: focus,
+        diverged: true,
+        source: 'ambiguous',
+        sourceId: activeSource,
+        ownerConnection
+      }
+    }
     const focus = String(focusedOwner.profile).trim() || active
     const focusSource = activeSourceId(focusedOwner?.connectionId, focus)
     const verified = Boolean(activeSource) && focusSource === activeSource
@@ -92,8 +108,8 @@ function resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, a
       ownerConnection
     }
   }
-  // Compatibility ladder (desktop builds without the focused-owner atom): no
-  // cross-connection focus exists there, so profile parity is the honest check.
+  // Older SDK build with NO focus-owner atom (feature absent): no cross-connection
+  // focus exists there, so profile parity is the honest check.
   const alias = String(focusedProfile || '').trim()
   const focus = alias || active
   const diverged = Boolean(alias) && alias !== active
@@ -486,12 +502,18 @@ function statusFundingSummary(row, model) {
   return compactFundingSummary(row, model)
 }
 
-function chipDescription(row, model, data, switching, ready, refetchError, scope) {
+function chipDescription(row, model, data, switching, ready, refetchError, scope, backendGone) {
   if (switching) return `Switching profile — ${scope.fetchProfile} usage will refresh when the new profile is ready.`
   const updated = data?.fetched_at ? new Date(data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet'
   const stateNote = scope?.diverged
     ? ` Shows ${scope.fetchProfile} profile usage; the focused chat is in ${scope.focusProfile}.`
     : ''
+  if (backendGone) {
+    // The active profile's socket has no provider-usage backend installed (its
+    // /overview 404s). Surfacing just "unavailable" would hide the cause; the
+    // toolbar must say the backend isn't there and never auto-install it.
+    return `Provider usage isn't enabled or installed in ${scope.fetchProfile}. Enable or install this plugin in that profile to see usage; Hermes never edits profiles automatically.${stateNote}`
+  }
   if (!ready) {
     return row
       ? `Provider usage for ${scope.fetchProfile} is from ${updated}; reconnecting.${stateNote}`
@@ -665,7 +687,7 @@ function LimitGroup({ rowId, limit, grouped = false }) {
       }),
       jsx('div', {
         style: { display: 'grid', gridTemplateColumns: windows.length > 1 ? 'repeat(auto-fit, minmax(145px, 1fr))' : '1fr', columnGap: 18, rowGap: 1 },
-        children: windows.map(window => jsx(UsageMeter, { key: `${rowId}-${limit?.id}-${window?.label}`, window, compact: true }))
+        children: windows.map(window => jsx(UsageMeter, { window, compact: true }, `${rowId}-${limit?.id}-${window?.label}`))
       })
     ]
   })
@@ -683,13 +705,12 @@ function PricingAndDemand({ row, always = false }) {
       entries.length > 0
         ? entries.map((entry, index) =>
             jsxs('div', {
-              key: `pricing-${index}`,
               style: { display: 'flex', justifyContent: 'space-between', gap: 12, ...textQuaternary, fontSize: 10, lineHeight: 1.45 },
               children: [
                 jsx('span', { children: entry?.label || 'Rate' }),
                 jsx('span', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, children: entry?.value || entry?.detail || 'Unavailable' })
               ]
-            })
+            }, `pricing-${index}`)
           )
         : jsx('span', {
             style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 },
@@ -725,13 +746,12 @@ function ModelAccess({ row }) {
               ? 'Paid credits required'
               : 'Unavailable'
         return jsxs('div', {
-          key: `${entry?.model}-${index}`,
           style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, fontSize: 10, lineHeight: 1.45 },
           children: [
             jsx('span', { style: { ...textSecondary, fontWeight: 500 }, children: entry?.model || 'Model' }),
             jsx('span', { style: { ...textQuaternary, textAlign: 'right' }, children: status })
           ]
-        })
+        }, `${entry?.model}-${index}`)
       })
     ]
   })
@@ -800,7 +820,6 @@ function AllProviderMetrics({ row, complete = false }) {
       children: [
         products.map((product, index) =>
           jsxs('section', {
-            key: `${row.id}-${product.id}`,
             style: { display: 'grid', gap: 8, paddingTop: index > 0 ? 11 : 0, borderTop: index > 0 ? HAIRLINE : 'none' },
             children: [
               jsx(SectionLabel, { aside: product.kind === 'subscription' ? 'Subscription' : 'API credits', children: product.label }),
@@ -808,7 +827,7 @@ function AllProviderMetrics({ row, complete = false }) {
                 ? jsx(AllProviderMetrics, { row: { ...product, id: `${row.id}-${product.id}`, products: [] } })
                 : jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: product.unavailable_reason || 'This product does not expose usage data.' })
             ]
-          })
+          }, `${row.id}-${product.id}`)
         ),
         jsx(ModelAccess, { row }),
         jsx(ProviderNotes, { row, complete }),
@@ -820,7 +839,7 @@ function AllProviderMetrics({ row, complete = false }) {
     style: { display: 'grid', gap: 10 },
     children: [
       limits.length > 0 ? jsx(SectionLabel, { aside: `${limits.length} ${limits.length === 1 ? 'limit group' : 'limit groups'}`, children: 'Limits' }) : null,
-      limits.map((limit, index) => jsx(LimitGroup, { key: `${row.id}-${limit.id}`, rowId: row.id, limit, grouped: index > 0 })),
+      limits.map((limit, index) => jsx(LimitGroup, { rowId: row.id, limit, grouped: index > 0 }, `${row.id}-${limit.id}`)),
       balances.length > 0
         ? jsxs('div', {
             style: { display: 'grid', gap: 4, paddingTop: limits.length > 0 ? 10 : 0, borderTop: limits.length > 0 ? HAIRLINE : 'none' },
@@ -828,7 +847,7 @@ function AllProviderMetrics({ row, complete = false }) {
               jsx(SectionLabel, { children: row?.id === 'openai-codex' ? 'Paid fallback' : 'Balance' }),
               jsx('div', {
                 style: { display: 'grid', gridTemplateColumns: balances.length > 1 ? 'repeat(auto-fit, minmax(130px, 1fr))' : '1fr', gap: 12 },
-                children: balances.map(balance => jsx(BalanceMetric, { key: `${balance.label}-${balance.currency}`, balance, subdued: row?.id === 'openai-codex' }))
+                children: balances.map(balance => jsx(BalanceMetric, { balance, subdued: row?.id === 'openai-codex' }, `${balance.label}-${balance.currency}`))
               })
             ]
           })
@@ -987,7 +1006,7 @@ function LimitedProviders({ rows }) {
         },
         children: jsxs('span', {
           style: { display: 'flex', alignItems: 'center', gap: 7, ...textTertiary, fontSize: 11 },
-          children: [jsx(open ? icons.ChevronDown : icons.ChevronRight, { 'aria-hidden': true, style: { width: 13, height: 13 } }), `Limited data (${rows.length})`]
+          children: [jsx(open ? icons.ChevronDown : icons.ChevronRight, { 'aria-hidden': true, style: { width: 13, height: 13 } }, 'chevron'), jsx('span', { children: `Limited data (${rows.length})` }, 'label')]
         })
       }),
       open
@@ -995,13 +1014,12 @@ function LimitedProviders({ rows }) {
             style: { display: 'grid', gap: 10, padding: '5px 0 12px 20px' },
             children: rows.map(row =>
               jsxs('div', {
-                key: row.id,
                 style: { display: 'grid', gap: 2 },
                 children: [
                   jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 500 }, children: row.label }),
                   jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.4 }, children: row.unavailable_reason || 'This provider does not expose usage or balance data.' })
                 ]
-              })
+              }, row.id)
             )
           })
         : null
@@ -1029,11 +1047,12 @@ function ActiveUsageChip({ ctx }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
   const activeProfile = useValue(host.state.profile)
-  const activeConnectionId = host.state.connectionId ? useValue(host.state.connectionId) : ''
-  const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
-  const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
+  const activeConnectionId = host.state.connectionId !== undefined ? useValue(host.state.connectionId) : ''
+  const hasFocusedOwner = host.state.focusedSessionOwner !== undefined
+  const focusedOwner = hasFocusedOwner ? useValue(host.state.focusedSessionOwner) : null
+  const focusedProfile = host.state.focusedSessionProfile !== undefined ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
-  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile })
+  const scope = resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile })
 
   // Divergence fails closed: never fetch or probe for a foreign account.
   if (scope.diverged) {
@@ -1056,7 +1075,7 @@ function GatedUsageChip({ focusProfile }) {
         host.notify({ kind: 'info', message: `Provider usage follows the active profile. Switch to ${focusProfile} to see its usage.` })
       },
       style: { maxWidth: 230 },
-      children: [jsx(icons.Activity, { 'aria-hidden': true }), jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Usage on ${focusProfile}` })]
+      children: [jsx(icons.Activity, { 'aria-hidden': true }, 'icon'), jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Usage on ${focusProfile}` }, 'label')]
     })
   })
 }
@@ -1068,16 +1087,21 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   const row = activeRow(query.data, provider)
   const state = fundingState(row, model)
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
+  // The active profile's socket 404s /overview AND we have no rows: the backend
+  // isn't enabled/installed for this profile. Make that explicit on the toolbar
+  // too (not just the pane) — the iconography stays a warning, never a guess.
+  const backendGone = ready && Boolean(query.isError) && !row && isBackendNotEnabled(query.error)
   const refetchError = Boolean(query.isError) && Boolean(row)
   const label = row ? compactProviderLabel(row) : 'Usage'
 
   let summary = 'unavailable'
   if (switching) summary = 'switching'
+  else if (backendGone) summary = `not enabled in ${scope.fetchProfile}`
   else if (row) summary = statusFundingSummary(row, model)
   else if (ready) summary = query.isLoading ? 'checking' : 'unavailable'
   if (refetchError) summary = `${summary} · not refreshed`
 
-  const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope)
+  const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope, backendGone)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
 
   return jsx(Tip, {
@@ -1093,8 +1117,8 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
       },
       style: { maxWidth: 230, fontVariantNumeric: 'tabular-nums' },
       children: [
-        jsx(Icon, { 'aria-hidden': true }),
-        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` })
+        jsx(Icon, { 'aria-hidden': true }, 'icon'),
+        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` }, 'label')
       ]
     })
   })
@@ -1104,11 +1128,12 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
   const activeProfile = useValue(host.state.profile)
-  const activeConnectionId = host.state.connectionId ? useValue(host.state.connectionId) : ''
-  const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
-  const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
+  const activeConnectionId = host.state.connectionId !== undefined ? useValue(host.state.connectionId) : ''
+  const hasFocusedOwner = host.state.focusedSessionOwner !== undefined
+  const focusedOwner = hasFocusedOwner ? useValue(host.state.focusedSessionOwner) : null
+  const focusedProfile = host.state.focusedSessionProfile !== undefined ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
-  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile })
+  const scope = resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile })
 
   // Divergence fails closed: the focused chat is owned by another source than
   // the active socket ctx.rest can reach, so we neither fetch nor probe — we
@@ -1182,11 +1207,11 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
       jsxs('div', {
         style: { minWidth: 0, display: 'grid', gap: 2 },
         children: [
-          jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }),
-          jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: scopeSubtitle })
+          jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }, 'title'),
+          jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: scopeSubtitle }, 'subtitle')
         ]
-      }),
-      refreshButton
+      }, 'title-block'),
+      jsx('div', { children: refreshButton }, 'refresh')
     ]
   })
 
@@ -1196,7 +1221,7 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
     ? jsx('div', {
         style: { display: 'flex', alignItems: 'center', gap: 9, padding: '8px 18px', borderBottom: HAIRLINE, background: 'var(--ui-bg-tertiary)' },
         children: [
-          jsx(StatusDot, { tone: switching ? 'muted' : 'warn' }),
+          jsx(StatusDot, { tone: switching ? 'muted' : 'warn' }, 'dot'),
           jsx('span', {
             style: { ...textSecondary, fontSize: 11, lineHeight: 1.4 },
             children: switching
@@ -1204,9 +1229,9 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
               : refetchError
                 ? `Could not refresh — showing ${scope.fetchProfile} usage from ${formatUpdated(query.data?.fetched_at) || 'earlier'}.`
                 : `Reconnecting — showing ${scope.fetchProfile} usage from ${hasRows ? formatUpdated(query.data?.fetched_at) : 'earlier'}.`
-          })
+          }, 'text')
         ]
-      })
+      }, 'stale')
     : null
 
   let body
@@ -1216,9 +1241,9 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
     body = jsxs('div', {
       style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center', textAlign: 'center', gap: 10 },
       children: [
-        jsx(StatusDot, { tone: 'warn', style: { width: 10, height: 10 } }),
-        jsx('strong', { style: { ...textSecondary, fontSize: 12, fontWeight: 600 }, children: 'Reconnecting' }),
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: `Provider usage for ${scope.fetchProfile} will load when the connection is ready.` })
+        jsx(StatusDot, { tone: 'warn', style: { width: 10, height: 10 } }, 'dot'),
+        jsx('strong', { style: { ...textSecondary, fontSize: 12, fontWeight: 600 }, children: 'Reconnecting' }, 'title'),
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: `Provider usage for ${scope.fetchProfile} will load when the connection is ready.` }, 'hint')
       ]
     })
   } else if (!switching && ready && query.isLoading && !hasRows) {
@@ -1228,15 +1253,15 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
       style: { padding: 24, display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12 },
       children: backendNotEnabled
         ? [
-            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
-            jsx('strong', { children: `Provider usage isn't enabled or installed in ${scope.fetchProfile}` }),
-            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in the profile to see provider usage here. Hermes never edits profiles automatically.' })
+            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }, 'icon'),
+            jsx('strong', { children: `Provider usage isn't enabled or installed in ${scope.fetchProfile}` }, 'title'),
+            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in the profile to see provider usage here. Hermes never edits profiles automatically.' }, 'hint')
           ]
         : [
-            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
-            jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }),
-            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }),
-            jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' })
+            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }, 'icon'),
+            jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }, 'title'),
+            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }, 'hint'),
+            jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' }, 'retry')
           ]
     })
   } else {
@@ -1244,7 +1269,9 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
       style: { height: 'calc(100% - 58px)', overflowY: 'auto', overflowX: 'hidden' },
       children: [
         staleBanner,
-        selected ? jsx(ActiveProvider, { row: selected, model }) : null,
+        selected
+          ? jsx(ActiveProvider, { row: selected, model }, 'active')
+          : null,
         jsxs('section', {
           'aria-labelledby': 'provider-usage-accounts-heading',
           style: { padding: '15px 18px 18px' },
@@ -1252,20 +1279,20 @@ function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway
             jsxs('div', {
               style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingBottom: 6 },
               children: [
-                jsx('h2', { id: 'provider-usage-accounts-heading', style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Other providers' }),
-                jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: `${available.length} reporting` })
+                jsx('h2', { id: 'provider-usage-accounts-heading', style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Other providers' }, 'heading'),
+                jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: `${available.length} reporting` }, 'count')
               ]
-            }),
+            }, 'accounts-header'),
             available.length > 0
-              ? available.map(row => jsx(ProviderDisclosure, { key: row.id, row }))
-              : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }),
-            jsx(LimitedProviders, { rows: limited }),
+              ? available.map(row => jsx(ProviderDisclosure, { row }, row.id))
+              : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }, 'empty-accounts'),
+            jsx(LimitedProviders, { rows: limited }, 'limited'),
             jsx('footer', {
               style: { ...textQuaternary, fontSize: 9, lineHeight: 1.45, paddingTop: 14 },
               children: `Credentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.`
-            })
+            }, 'footer')
           ]
-        })
+        }, 'accounts')
       ]
     })
   }

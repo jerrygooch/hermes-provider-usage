@@ -23,10 +23,20 @@ function bodyText() {
 export function mountPlugin(pluginModule) {
   const contributions = []
   const restCalls = []
+  // Scriptable rest door for lifecycle scenarios: 'ok' resolves the fixture
+  // overview; '404' = plugin backend namespace absent in the ACTIVE profile (no
+  // auto-install, mirroring the real ctx.rest 404); 'error' = generic API
+  // failure. Driven from the page script or over CDP via window.__HARNESS__.
+  const restState = { mode: 'ok', overview: currentFixture().overview, status: { status: 404, message: 'plugin namespace not enabled' } }
+  window.__HARNESS__ = window.__HARNESS__ || {}
+  window.__HARNESS__.setRest = mode => { restState.mode = mode }
+  window.__HARNESS__.setOverview = data => { restState.overview = data }
   const ctx = {
     rest: (path, opts) => {
       restCalls.push({ path, opts })
-      return Promise.resolve(currentFixture().overview)
+      if (restState.mode === '404') return Promise.reject(restState.status)
+      if (restState.mode === 'error') return Promise.reject(new Error('overview call failed'))
+      return Promise.resolve(restState.overview)
     },
     socket: () => () => {},
     storage: { get: () => undefined, set: () => {}, remove: () => {} },
@@ -51,7 +61,7 @@ export function mountPlugin(pluginModule) {
   // Static-markup DOM snapshot (geometry + text) for the capture script. Poll
   // until React has actually committed the plugin's content, then measure.
   window.__HARNESS_READY__ = true
-  pollUntilCommitted(() => computeGeometry('pane-root'))
+  pollUntilCommitted(() => computeAllGeometry())
 }
 
 function mountContribution(containerId, renderFn, { width, height }) {
@@ -98,6 +108,21 @@ function pollUntilCommitted(fn) {
     setTimeout(attempt, 120)
   }
   attempt()
+}
+
+// Pane geometry (as before) PLUS the chip's OWN button geometry. The harness
+// wrapper (#chip-root) is 320px wide; the plugin's real chip button is capped at
+// 230px (production cap) and must measure positive width AND height, so a
+// zero-height toolbar regression could never pass by measuring only the wrapper.
+function computeAllGeometry() {
+  const records = computeGeometry('pane-root')
+  const chipRoot = document.getElementById('chip-root')
+  const chipButton = chipRoot && chipRoot.querySelector('button')
+  records.chip = {
+    rootRect: chipRoot ? chipRoot.getBoundingClientRect().toJSON() : null,
+    button: chipButton ? box(chipButton) : null
+  }
+  return records
 }
 
 function computeGeometry(containerId) {

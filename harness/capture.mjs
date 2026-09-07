@@ -27,8 +27,11 @@ const dist = path.join(__dirname, 'dist')
 const shots = path.join(dist, 'shots')
 fs.mkdirSync(shots, { recursive: true })
 
-const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
-const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || 'C:/Users/jerry/AppData/Local/hermes/hermes-agent'
+// Portable defaults: never hardcode a personal user path. HERMES_AGENT_ROOT may
+// point at any checkout; CHROME may point at any Chrome binary. Both resolve to
+// the standard-machine path when the env var is unset.
+const CHROME = process.env.HARNESS_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
 
 // Import the hermes-agent CDP client by absolute path.
 const { CDP, discoverTarget } = await import(
@@ -102,6 +105,19 @@ async function waitForRender(cdp, timeoutMs = 30000) {
   }
 }
 
+// Poll a page expression until it returns a truthy value (or timeout). Used by
+// the lifecycle scenario to synchronise on the plugin actually committing each
+// step's DOM before capturing evidence.
+async function waitUntil(cdp, expr, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const ok = await cdp.eval(expr).catch(() => false)
+    if (ok) return
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for: ${expr}`)
+    await sleep(120)
+  }
+}
+
 const geometry = {}
 try {
   let cdp = null
@@ -164,6 +180,10 @@ try {
       console.log(`Captured ${label}  pane=${JSON.stringify(meta.paneRect)}  chip=${JSON.stringify(meta.chipRect)}`)
     }
   }
+  // Real-browser lifecycle verification of the priority regression: a default
+  // profile WITH backend → a profile WITHOUT the plugin backend (ChaosForge) →
+  // back to default. Asserts pane AND toolbar at every step.
+  geometry.lifecycle = await runLifecycle(cdp, { dist, PORT, htmlPage })
   cdp.close()
 } finally {
   server.close()
@@ -203,4 +223,58 @@ function htmlPage({ fixture, width, fixtureData, hostCfg }) {
     <script type="module" src="./app.js"></script>
   </body>
 </html>`
+}
+
+/**
+ * Real-browser lifecycle verification of the priority regression:
+ *   default (with backend) → ChaosForge-like profile (NO backend, `/overview`
+ *   404s) → back to default.
+ * Every step drives the REAL plugin through real re-renders (SDK atoms + the
+ * stubbed-but-keyed useQuery/ctx.rest) and asserts pane AND toolbar state.
+ * Returns per-step evidence recorded into geometry.json for verify.mjs.
+ */
+async function runLifecycle(cdp, { dist, PORT, htmlPage }) {
+  const fixture = 'compact-5h-wk'
+  const width = 420
+  const fixtureData = JSON.parse(fs.readFileSync(path.join(fixturesDir, `${fixture}.json`), 'utf8'))
+  const hostCfg = {
+    model: 'claude-4-9-sonnet',
+    sessionId: 'sess-harness-1',
+    profile: 'default',
+    connectionId: 'local',
+    focusedSessionOwner: { connectionId: 'local', profile: 'default' },
+    focusedSessionProfile: 'default',
+    gateway: 'open'
+  }
+  fs.writeFileSync(path.join(dist, 'index.html'), htmlPage({ fixture, width, fixtureData, hostCfg }))
+  await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` })
+  await waitForRender(cdp)
+
+  const paneText = () => cdp.eval('(document.getElementById("pane-root")||document.body).innerText').catch(() => '')
+  const chipText = () => cdp.eval('(document.getElementById("chip-root")||document.body).innerText').catch(() => '')
+  // Live chip BUTTON geometry (positive w/h, ≤230px production cap) — not the
+  // 320px harness wrapper. This is what catches a zero-height toolbar.
+  const chipButton = () => cdp.eval(`(() => { const b = document.querySelector('#chip-root button'); if (!b) return null; const r = b.getBoundingClientRect(); return { w: r.width, h: r.height, text: (b.textContent||'').trim() }; })()`).catch(() => null)
+
+  const snapshot = async () => ({ paneText: (await paneText()).slice(0, 1500), chipText: (await chipText()).slice(0, 300), chipButton: await chipButton() })
+
+  // Step 0 — default with backend: genuine data on pane + toolbar.
+  await waitUntil(cdp, `(document.getElementById("pane-root")||document.body).innerText.includes("5h 62%")`)
+  await sleep(250)
+  const s0 = { label: 'default-with-backend', profile: 'default', ...(await snapshot()) }
+
+  // Step 1 — ChaosForge-like profile, backend NOT installed: /overview 404s.
+  await cdp.eval(`window.__HARNESS__.setRest('404'); window.__HARNESS__.set({ profile:'chaosforge', connectionId:'local', sessionId:'sess-cf', focusedSessionOwner:{connectionId:'local',profile:'chaosforge'}, focusedSessionProfile:'chaosforge', gateway:'open' }); true`)
+  await waitUntil(cdp, `(document.getElementById("pane-root")||document.body).innerText.includes("isn't enabled or installed in chaosforge")`)
+  await sleep(250)
+  const s1 = { label: 'chaosforge-no-backend', profile: 'chaosforge', restMode: '404', ...(await snapshot()) }
+
+  // Step 2 — return to default: back to the cached default account, recovered.
+  await cdp.eval(`window.__HARNESS__.setRest('ok'); window.__HARNESS__.set({ profile:'default', connectionId:'local', sessionId:'sess-harness-1', focusedSessionOwner:{connectionId:'local',profile:'default'}, focusedSessionProfile:'default', gateway:'open' }); true`)
+  await waitUntil(cdp, `(document.getElementById("pane-root")||document.body).innerText.includes("5h 62%")`)
+  await sleep(250)
+  const s2 = { label: 'recovered-default', profile: 'default', restMode: 'ok', ...(await snapshot()) }
+
+  console.log('Lifecycle scenario captured: default → chaosforge(no backend) → default')
+  return { fixture, width, steps: [s0, s1, s2] }
 }

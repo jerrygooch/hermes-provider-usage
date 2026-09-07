@@ -5,8 +5,19 @@
  * RowButton, StatusDot, icons) straight from hermes-agent's source, so the
  * provider-usage plugin gets faithful native widgets. Only the parts of the SDK
  * that talk to a live app (host atoms/request/events, useQuery data fetching,
- * haptics) and the Tooltip (`Tip`) are replaced by a deterministic fixture test
- * double. This is a COMPONENT HARNESS, not a screenshot of the running desktop.
+ * haptics) and the Tooltip (`Tip`) are replaced by a deterministic fixture
+ * double. The plugin→app bridge is a COMPONENT HARNESS, not the running desktop.
+ *
+ * Fault model (faithful to the plugin's assumptions):
+ *  - host.state.* atoms are READONLY to the plugin but we keep them observable
+ *    and settable through `window.__HARNESS__.set` so scripted lifecycle
+ *    scenarios (reconnect, diverging focus, A-B-A session swaps) can drive the
+ *    real plugin through real re-renders.
+ *  - useQuery keeps its last resolved data while `enabled:false` (exactly what
+ *    React Query does), so a gateway reconnect keeps the cached rows STALE
+ *    instead of wiping them.
+ *  - ctx.rest is scriptable per fixture: resolve the overview, or reject with a
+ *    404 (backend namespace missing) or a generic error (API failure).
  */
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -14,15 +25,15 @@ import { Loader } from '@/components/ui/loader'
 import { RowButton } from '@/components/ui/row-button'
 import { StatusDot } from '@/components/status-dot'
 import * as icons from '@/lib/icons'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
 // Real SDK UI primitives, re-exported so the plugin imports them faithfully.
 export { Button, Badge, Loader, RowButton, StatusDot, icons }
 
 // ---- Fixture loader: injects the active scenario before the app boots ----
-// window.__FIXTURE__ = { overview: {...}, host: { model, sessionId, profile, gateway } }
-
+// window.__FIXTURE__ = { overview, host: {...}, rest: 'ok'|'404'|'error',
+//                        events: [...], sessionStatus: [...] }
 function fixture() {
   return window.__FIXTURE__ || { overview: null, host: {} }
 }
@@ -32,49 +43,135 @@ function overview() {
 function activeProvider() {
   return overview()?.active?.provider || ''
 }
-function activeModel() {
-  return overview()?.active?.model || fixture().host.model || ''
+
+// ---- Reactive atoms (readonly to the plugin; settable via the controller) ----
+function makeAtom(initial) {
+  let value = initial
+  const subs = new Set()
+  return {
+    get: () => value,
+    // public SDK atoms are readonly to consume via useValue; the harness
+    // controller is the only writer and exposes a derived `_set`.
+    _set(next) { if (value !== next) { value = next; for (const fn of subs) fn() } },
+    subscribe(fn) { subs.add(fn); return () => subs.delete(fn) }
+  }
 }
 
-// ---- Atoms: tiny readonly atoms the plugin reads via useValue ----
-const atom = value => ({
-  get: () => value,
-  set: () => {},
-  subscribe: () => () => {}
-})
-
-function hostAtom(key) {
-  return atom(getHostValue(key))
+const stateDim = {
+  model: '',
+  focusedSessionId: null,
+  focusedStoredSessionId: null,
+  focusedSessionProfile: '',
+  focusedSessionOwner: null,
+  focusOwnerPresent: false,
+  profile: '',
+  connectionId: '',
+  gateway: 'open'
 }
-function getHostValue(key) {
+function hostState() {
   const h = fixture().host || {}
-  return h[key] ?? ''
+  const ownerPresent = Object.prototype.hasOwnProperty.call(h, 'focusedSessionOwner')
+  return {
+    model: h.model ?? '',
+    focusedSessionId: h.sessionId ?? null,
+    focusedStoredSessionId: h.storedSessionId ?? h.sessionId ?? null,
+    focusedSessionProfile: h.focusedSessionProfile ?? h.profile ?? '',
+    focusedSessionOwner: h.focusedSessionOwner ?? null,
+    focusOwnerPresent: ownerPresent,
+    profile: h.profile ?? 'default',
+    connectionId: h.connectionId ?? 'local',
+    gateway: h.gateway ?? 'open'
+  }
 }
 
+function buildHostState() {
+  const s = hostState()
+  const atoms = {
+    model: makeAtom(s.model),
+    focusedSessionId: makeAtom(s.focusedSessionId),
+    focusedStoredSessionId: makeAtom(s.focusedStoredSessionId),
+    focusedSessionProfile: makeAtom(s.focusedSessionProfile),
+    profile: makeAtom(s.profile),
+    connectionId: makeAtom(s.connectionId),
+    gateway: makeAtom(s.gateway)
+  }
+  // The SDK publishes the owner atom always in current builds; when the fixture
+  // does not pass it we still expose the atom so the plugin's "absent vs null"
+  // detection is exercised faithfully: undefined atom → absent (legacy).
+  let ownerAtom
+  if (s.focusOwnerPresent) {
+    ownerAtom = makeAtom(s.focusedSessionOwner)
+    atoms.__focusedSessionOwner = ownerAtom
+  } else {
+    ownerAtom = undefined
+  }
+  return { atoms, ownerAtom }
+}
+
+let hostStateCtx = buildHostState()
+
+// Controller the capture script (or a scenario page) drives over CDP.
+window.__HARNESS__ = {
+  set(partial) {
+    for (const [key, value] of Object.entries(partial)) {
+      if (key === 'focusedSessionOwner') {
+        if (hostStateCtx.ownerAtom) hostStateCtx.ownerAtom._set(value)
+        else if (value !== undefined) { hostStateCtx.ownerAtom = makeAtom(value); hostStateCtx.atoms.__focusedSessionOwner = hostStateCtx.ownerAtom }
+      } else if (hostStateCtx.atoms[key]) {
+        hostStateCtx.atoms[key]._set(value)
+      }
+    }
+  },
+  emit(type, event) {
+    if (type === 'session.info') for (const fn of [...(eventHandlers.sessionInfo || [])]) fn(event)
+  }
+}
+
+const eventHandlers = { sessionInfo: new Set() }
+
+function sessionStatusPlan(sessionId) {
+  const plan = fixture().sessionStatus
+  const entry = Array.isArray(plan) ? plan.find(p => p.session_id === sessionId) : null
+  return entry
+}
+
+// ---- host bridge ----
 export const host = {
   state: {
-    model: hostAtom('model'),
-    activeSessionId: hostAtom('sessionId'),
-    focusedSessionId: hostAtom('sessionId'),
-    focusedStoredSessionId: hostAtom('sessionId'),
-    focusedSessionProfile: hostAtom('profile'),
-    profile: hostAtom('profile'),
-    gateway: hostAtom('gateway')
+    get model() { return hostStateCtx.atoms.model },
+    get focusedSessionId() { return hostStateCtx.atoms.focusedSessionId },
+    get focusedStoredSessionId() { return hostStateCtx.atoms.focusedStoredSessionId },
+    get focusedSessionProfile() { return hostStateCtx.atoms.focusedSessionProfile },
+    get connectionId() { return hostStateCtx.atoms.connectionId },
+    get profile() { return hostStateCtx.atoms.profile },
+    get gateway() { return hostStateCtx.atoms.gateway },
+    get focusedSessionOwner() { return hostStateCtx.ownerAtom }
   },
-  // Called by useActiveProvider: resolve the active provider from the fixture.
-  async request(method) {
+  async request(method, params) {
     if (method === 'session.status') {
-      return { info: { provider: activeProvider() }, provider: activeProvider() }
+      const id = params?.session_id
+      const plan = sessionStatusPlan(id)
+      const provider = plan?.provider ?? activeProvider()
+      const delayMs = plan?.delayMs ?? 0
+      return new Promise(resolve => {
+        setTimeout(() => resolve({ info: { provider }, provider }), delayMs)
+      })
     }
     return {}
   },
   onEvent(type, handler) {
     if (type === 'session.info') {
-      // Deliver the fixture's active provider once on subscribe so the pane
-      // resolves to the intended provider deterministically.
-      setTimeout(() => {
-        handler({ payload: { provider: activeProvider() } })
-      }, 0)
+      eventHandlers.sessionInfo.add(handler)
+      // Deterministic initial delivery of the fixture's active provider.
+      setTimeout(() => handler({ payload: { provider: activeProvider() } }), 0)
+      // Scheduled late/foreign events (A-B-A, source-attributed, anonymous).
+      const scheduled = Array.isArray(fixture().events) ? fixture().events : []
+      for (const ev of scheduled) {
+        setTimeout(() => {
+          if (eventHandlers.sessionInfo.has(handler)) handler(ev)
+        }, ev.afterMs ?? 0)
+      }
+      return () => eventHandlers.sessionInfo.delete(handler)
     }
     return () => {}
   },
@@ -88,50 +185,74 @@ export const host = {
 
 export const haptic = () => {}
 
-// ---- useValue: reads an atom (as the real SDK does via @nanostores/react) ----
+// ---- useValue: subscribes to an atom exactly like @nanostores/react ----
 export function useValue(atomLike) {
-  if (atomLike && typeof atomLike.get === 'function') return atomLike.get()
-  return atomLike ?? null
+  if (atomLike === undefined || atomLike === null) return null
+  if (typeof atomLike.get !== 'function') return atomLike
+  return useSyncExternalStore(
+    subscribe => {
+      const un = atomLike.subscribe(subscribe)
+      return un
+    },
+    () => atomLike.get()
+  )
 }
 
-// ---- useQuery: deterministic fixture double. Real SDK returns a React Query
-// result; we return a resolved result shaped the same (data/isLoading/isError/
-// isFetching/refetch) so ALL downstream render logic runs for real. ----
+// ---- useQuery: deterministic double that faithfully models React Query ----
+// It caches the last resolved data per key and KEEPS it while `enabled:false`
+// (reconnect) instead of clearing — this is the mechanism the plugin relies on
+// for "reconnecting keeps the last rows stale".
+// The key is serialized (React Query structurally hashes its key), NOT used by
+// array reference identity — the plugin builds a fresh array each render, so a
+// reference-keyed Map never hits and the cache would be dead on arrival (no
+// in-browser reconnect retention, no demonstrable cross-account isolation).
+const queryCache = new Map()
+function queryKeyOf(key) {
+  try { return JSON.stringify(key) } catch { return String(key) }
+}
 export function useQuery(config) {
   const noop = () => {}
   if (typeof config.queryFn !== 'function') {
     return { data: overview(), isLoading: false, isError: false, isFetching: false, refetch: noop }
   }
-  let result
-  try {
-    result = config.queryFn()
-  } catch {
-    result = undefined
-  }
-  if (result && typeof result.then === 'function') {
-    // Async path: the plugin's ctx.rest may return a promise in real usage;
-    // resolve it and re-render (data becomes available a microtask later).
-    const [state, setState] = useState({ data: undefined, isLoading: true })
-    useEffect(() => {
-      let alive = true
+  const cacheKey = queryKeyOf(config.queryKey)
+  const [state, setState] = useState(() => {
+    const cached = queryCache.get(cacheKey)
+    if (!config.enabled) {
+      return { data: cached ?? undefined, isLoading: false, isError: false, isFetching: false }
+    }
+    return { data: cached ?? undefined, isLoading: !cached, isError: false, isFetching: !cached }
+  })
+  useEffect(() => {
+    if (config.enabled !== true) return
+    let alive = true
+    let result
+    try { result = config.queryFn() } catch (e) { result = Promise.reject(e) }
+    if (result && typeof result.then === 'function') {
       Promise.resolve(result).then(
-        data => alive && setState({ data, isLoading: false }),
-        () => alive && setState({ data: undefined, isLoading: false })
+        data => { if (alive) { queryCache.set(cacheKey, data); setState({ data, isLoading: false, isError: false, isFetching: false }) } },
+        err => { if (alive) setState({ data: queryCache.get(cacheKey), isLoading: false, isError: true, isFetching: false, error: err }) }
       )
-      return () => {
-        alive = false
-      }
-    }, [])
-    return { ...state, isError: false, isFetching: false, refetch: noop }
-  }
-  return { data: result, isLoading: false, isError: false, isFetching: false, refetch: noop }
+    } else {
+      queryCache.set(cacheKey, result)
+      setState({ data: result, isLoading: false, isError: false, isFetching: false })
+    }
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.enabled, cacheKey])
+  // When the gateway disconnects (enabled:false) we return the cached data so
+  // the plugin renders it STALE (same as React Query's keepPreviousData).
+  const cached = queryCache.get(cacheKey)
+  const effective = config.enabled === false && cached !== undefined
+    ? { data: cached, isLoading: false, isError: false, isFetching: false }
+    : state
+  return { ...effective, refetch: noop, isFetching: false }
 }
 export const useMutation = () => [{}, {}]
 export const useQueryClient = () => ({})
+export const __QUERY_CACHE_RESET__ = () => queryCache.clear()
 
-// ---- Tip: faithful tooltip scaffold (title + wrapper). The real Tip is a
-// Radix tooltip wired to keybind/i18n stores; we render the trigger with the
-// label as the accessible title so screenshots show the same trigger. ----
+// ---- Tip: faithful tooltip scaffold (label as accessible title) ----
 export function Tip({ label, children, ...rest }) {
   return jsx(
     'span',
@@ -139,7 +260,7 @@ export function Tip({ label, children, ...rest }) {
       title: label,
       'aria-label': label,
       'data-fake-tip': 'stubbed-tooltip',
-      style: { display: 'inline-flex' },
+      style: { display: 'inline-flex', maxWidth: '100%' },
       ...rest,
       children
     }

@@ -93,12 +93,12 @@ async function harness(initial = {}) {
 
   // host.state atoms are READONLY to the plugin; expose setters via the harness.
   const setState = {
-    sessionId: v => atoms.sessionId.set(v),
-    profile: v => atoms.profile.set(v),
-    connectionId: v => atoms.connectionId.set(v),
-    gateway: v => atoms.gateway.set(v),
-    focusedOwner: v => atoms.focusedOwner?.set(v),
-    focusedProfile: v => atoms.focusedProfile?.set(v)
+    sessionId: v => ReactAct(() => atoms.sessionId.set(v)),
+    profile: v => ReactAct(() => atoms.profile.set(v)),
+    connectionId: v => ReactAct(() => atoms.connectionId.set(v)),
+    gateway: v => ReactAct(() => atoms.gateway.set(v)),
+    focusedOwner: v => ReactAct(() => atoms.focusedOwner?.set(v)),
+    focusedProfile: v => ReactAct(() => atoms.focusedProfile?.set(v))
   }
 
   const listeners = new Map()
@@ -120,7 +120,10 @@ async function harness(initial = {}) {
     notify() {},
     openWorkspace() {}
   }
-  const emit = (type, event) => { for (const fn of [...(listeners.get(type) || [])]) fn(event) }
+  // Delivering an event runs the plugin's session.info handler, which may call
+  // setState — keep it inside an act scope so React doesn't warn about a root
+  // update outside a test act().
+  const emit = (type, event) => { ReactAct(() => { for (const fn of [...(listeners.get(type) || [])]) fn(event) }) }
 
   // Controlled query surface. useSyncExternalStore dedupes on getSnapshot
   // IDENTITY, so each setQuery must hand out a NEW snapshot object (not mutate
@@ -135,8 +138,10 @@ async function harness(initial = {}) {
     return React.useSyncExternalStore(h => { querySubs.add(h); return () => querySubs.delete(h) }, () => querySnap)
   }
   const setQuery = patch => {
-    querySnap = { ...querySnap, ...patch, _v: querySnap._v + 1 }
-    for (const fn of querySubs) fn()
+    ReactAct(() => {
+      querySnap = { ...querySnap, ...patch, _v: querySnap._v + 1 }
+      for (const fn of querySubs) fn()
+    })
   }
 
   function useValue(atomLike) {
@@ -186,19 +191,26 @@ async function harness(initial = {}) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  const flush = () => ReactAct(async () => {})
-  const mountChip = async () => { await ReactAct(async () => { root.render(chipEl) }); await flush() }
-  const mountPane = async () => { await ReactAct(async () => { root.render(paneEl) }); await flush() }
+  // `ReactAct(async () => …)` flushes effects AND pending microtasks (promise
+  // resolutions in useActiveProvider's session.status handler), so late async
+  // replies are attributed to an act scope instead of warning about an update
+  // to Root outside act(). inAct is the exported form for scenario-driven
+  // async mutations (req.resolve / req.reject).
+  const inAct = fn => ReactAct(async () => { await fn() })
+  const flush = async () => { await inAct(async () => {}); await inAct(async () => {}) }
+  const mountChip = async () => { await inAct(async () => { root.render(chipEl) }); await flush() }
+  const mountPane = async () => { await inAct(async () => { root.render(paneEl) }); await flush() }
   const text = () => container.textContent
-  const unmount = () => { root.unmount(); document.body.removeChild(container) }
+  const unmount = () => { ReactAct(() => { root.unmount() }); document.body.removeChild(container) }
 
   return {
-    mod, setState, emit, setQuery, queryResult: querySnap, requests, restCalls, text, mountChip, mountPane, unmount, flush,
+    mod, setState, emit, setQuery, queryResult: querySnap, requests, restCalls, text, inAct, mountChip, mountPane, unmount, flush,
     get queryCalls() { return queryCalls },
     get lastQueryKey() { return lastQueryKey },
     readonly: atoms,
     remembered: key => mod.namespace.rememberedProvider(key),
-    scopeOf: arg => mod.namespace.resolveUsageScope(arg)
+    scopeOf: arg => mod.namespace.resolveUsageScope(arg),
+    usageKey: (fetchProfile, provider, model, source) => mod.namespace.providerUsageQueryKey(fetchProfile, provider, model, source)
   }
 }
 
@@ -241,14 +253,12 @@ const fixture = () => ({
   const sourceKey = 'local::default'
 
   // B resolves first: the current session owns the provider.
-  reqB.resolve({ info: { provider: 'anthropic' } })
-  await h.flush()
+  await h.inAct(async () => { reqB.resolve({ info: { provider: 'anthropic' } }) })
   check('S2 current session B (anthropic) wins', h.remembered(sourceKey) === 'anthropic', h.remembered(sourceKey))
   check('S2 chip reflects B provider', h.text().includes('40% left'), h.text())
 
   // A resolves LATE for the superseded session: must be dropped, not applied.
-  reqA.resolve({ info: { provider: 'xai-oauth' } })
-  await h.flush()
+  await h.inAct(async () => { reqA.resolve({ info: { provider: 'xai-oauth' } }) })
   check('S2 late response for superseded A does NOT win', h.remembered(sourceKey) === 'anthropic', h.remembered(sourceKey))
   check('S2 chip stays on B provider after late A (no A-B reversal)', h.text().includes('40% left') && !h.text().includes('62% left'), h.text())
   h.unmount()
@@ -340,7 +350,7 @@ const fixture = () => ({
 //         focused remote chat is a different connection: still fails closed. ──
 {
   const h = await harness({ sessionId: 'sess-remote', connectionId: 'remote-main', profile: 'Alice', focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, focusedProfile: 'Alice' })
-  const scope = h.scopeOf({ focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, focusedProfile: 'Alice', activeConnectionId: 'remote-main', activeProfile: 'Alice' })
+  const scope = h.scopeOf({ focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'remote-main', activeProfile: 'Alice' })
   check('#1 same-profile remote: diverged at resolve level', scope.diverged === true, JSON.stringify(scope))
   await h.mountPane()
   check('#1 same-profile remote: pane gates (no wrong-account data)', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
@@ -365,6 +375,79 @@ const fixture = () => ({
   await h.mountPane()
   check('#5 refetch-error keeps the stale rows', h.text().includes('Account limits'), h.text())
   check('#5 refetch-error surfaces a stale banner', h.text().includes('Could not refresh'), h.text())
+  h.unmount()
+}
+
+// ── S9: Authoritative ambiguity — the SDK publishes the focus-owner atom but
+//        its value is null (unresolved/ambiguous focused id). Must fail closed
+//        and NEVER fall back to the profile-only ladder, which could name the
+//        active account and fetch its rows under the ambiguous chat's focus. ─
+{
+  const h = await harness({
+    sessionId: 'sess-ambiguous',
+    focusedOwner: null,        // atom PRESENT but null → authoritative ambiguity
+    focusedProfile: 'Alice',   // profile-only fallback would guess wrong
+    connectionId: 'local', profile: 'default'
+  })
+  h.setQuery({ data: fixture(), isLoading: false, isError: false })
+  const scope = h.scopeOf({ focusedOwner: null, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'local', activeProfile: 'default' })
+  check('#10 null focus-owner resolves as diverged (never profile-only bypass)', scope.diverged === true && scope.source === 'ambiguous', JSON.stringify(scope))
+  await h.mountPane()
+  check('#10 ambiguous focus gates instead of fetching active rows', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  check('#10 ambiguous focus does not display active-account data', !h.text().includes('Account limits'), h.text())
+  h.unmount()
+}
+
+// ── S10: Same profile-name, DIFFERENT connection: eventOwns must reject a
+//        session.info event that carries our focused session id but a foreign
+//        source (the remote alias vs the live socket) — even a same-name
+//        profile on another connection must not contaminate this account. ────
+{
+  const h = await harness({ sessionId: 'sess-A', connectionId: 'remote-main', profile: 'Alice', focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, focusedProfile: 'Alice', gateway: 'open' })
+  // active socket on remote-main:Alice diverges from focus remote-focus:Alice → gated.
+  await h.mountChip()
+  check('#11 same-profile different-connection chip gates (no foreign accounting)', h.text().includes('Usage on Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  h.unmount()
+}
+
+// ── S11: Missing backend on the ACTIVE profile (verified scope, /overview 404,
+//        no rows) must surface explicitly on the CHIP too — not a generic
+//        "unavailable", and certainly not a wrong-account figure. ─────────────
+{
+  const h = await harness({ sessionId: 'sess-cf', focusedOwner: { connectionId: 'local', profile: 'chaosforge' }, focusedProfile: 'chaosforge', connectionId: 'local', profile: 'chaosforge', gateway: 'open' })
+  h.setQuery({ data: null, isLoading: false, isError: true, isFetching: false, error: { status: 404, message: 'plugin namespace not enabled' } })
+  await h.mountChip()
+  check('#7 chip says backend not enabled on the active profile', h.text().includes('not enabled in chaosforge'), h.text())
+  check('#7 chip does NOT fall back to a generic "unavailable"', !/Usage · unavailable/.test(h.text()), h.text())
+  check('#7 chip does not show a wrong-account figure', !h.text().includes('62% left') && !h.text().includes('40% left'), h.text())
+  h.unmount()
+}
+
+// ── S12: Priority round-trip — default(with backend) → chaosforge(no backend)
+//        → default. The scope must STAY a genuine fetch at every step (verified,
+//        never a divergence gate) so the not-enabled state is reachable, and the
+//        query source must round-trip cleanly (default data is recoverable, no
+//        wrong-account key collision for chaosforge). ─────────────────────────
+{
+  const cfOwner = { connectionId: 'local', profile: 'chaosforge' }
+  const defOwner = { connectionId: 'local', profile: 'default' }
+  const scopes = [
+    h => h.scopeOf({ focusedOwner: defOwner, hasFocusedOwner: true, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' }),
+    h => h.scopeOf({ focusedOwner: cfOwner, hasFocusedOwner: true, focusedProfile: 'chaosforge', activeConnectionId: 'local', activeProfile: 'chaosforge' }),
+    h => h.scopeOf({ focusedOwner: defOwner, hasFocusedOwner: true, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' })
+  ]
+  const h = await harness({})
+  const r0 = scopes[0](h)
+  check('#8 default-with-backend scope is a verified fetch (not a gate)', r0.diverged === false && r0.source === 'active' && r0.fetchProfile === 'default', JSON.stringify(r0))
+  const scopeCf = scopes[1](h)
+  check('#8 chaosforge scope is a verified fetch (backend-not-enabled state reachable)', scopeCf.diverged === false && scopeCf.fetchProfile === 'chaosforge', JSON.stringify(scopeCf))
+  const r2 = scopes[2](h)
+  check('#8 return-to-default scope is verified again (recovery not gated)', r2.diverged === false && r2.fetchProfile === 'default', JSON.stringify(r2))
+  // Source-qualified keys: chaosforge and default accounts never collide, and the
+  // return restores the exact default source key (recover the right account).
+  const kDefault = h.usageKey('default', '', '', 'local::default')
+  const kChaos = h.usageKey('chaosforge', '', '', 'local::chaosforge')
+  check('#8 round-trip keys are source-distinct and stable', JSON.stringify(kDefault) !== JSON.stringify(kChaos) && JSON.stringify(kDefault) === JSON.stringify(h.usageKey('default', '', '', 'local::default')), JSON.stringify(kDefault))
   h.unmount()
 }
 

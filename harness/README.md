@@ -49,11 +49,14 @@ screenshots are unaffected.
 
 ## Prerequisites
 
-- Native Chrome (`C:/Program Files/Google/Chrome/Application/chrome.exe`).
-- Node ≥ 20. **No `npm install`** — `react`, `react-dom`, `esbuild`, and the SDK
-  source are resolved from the Hermes agent installation
-  (`$HERMES_AGENT_ROOT`, default `C:/Users/jerry/AppData/Local/hermes/hermes-agent`).
-- The plugin file being consumed: `desktop/plugin.js` (repo or worktree), or any
+- Native Chrome (`C:/Program Files/Google/Chrome/Application/chrome.exe`, override with `$HARNESS_CHROME`).
+- Node ≥ 20 and the repo's dev toolchain: `npm ci` (the `jsdom`/`react`/`react-dom`
+  devDependencies — used by the jsdom suites and for the harness docs).
+- A Hermes agent checkout whose **React + desktop SDK source** the bundle re-exports.
+  Set `$HERMES_AGENT_ROOT` (default: `AppData/Local/hermes/hermes-agent` under this
+  machine's home), and point `$HARNESS_CHROME` at any Chrome binary for the capture
+  step. No paths are baked into the repo; env vars make it portable.
+- The plugin file being consumed: `desktop/plugin.js` (repo or worktree default), or any
   other path passed via `--plugin`.
 
 Nothing is published or installed; nothing in a real profile is touched; the
@@ -65,18 +68,48 @@ fixture payloads contain only synthetic sample values.
 # 1. Bundle the REAL plugin + REAL SDK primitives + REAL React (default: ../desktop/plugin.js)
 node harness/build.mjs
 # point at a different (e.g. the ongoing-implementation) plugin:
-node harness/build.mjs --plugin C:/Users/jerry/projects/hermes-provider-usage-harden/desktop/plugin.js
+node harness/build.mjs --plugin ./desktop/plugin.js
 
-# 2. Capture all fixtures × widths (420 and 760) → PNG + geometry evidence
+# 2. Capture all fixtures × widths (420 and 760) → PNG + geometry evidence,
+#    then a real-browser LIFECYCLE scenario (default → no-backend → default)
 node harness/capture.mjs
 # one width or one fixture:
 node harness/capture.mjs --width 420
 node harness/capture.mjs --fixture credit-balance
+
+# 3. Verify: theme tokens, required text, chip geometry inside the 230px cap,
+#    governing chip values, and the lifecycle assertions
+node harness/verify.mjs
 ```
 
 Outputs land in `harness/dist/` and `harness/dist/shots/`:
-`<fixture>_w<width>.png`, `geometry.json` (pane/chip bounding rects, key node
-geometry, theme vars actually resolved, rendered text).
+`<fixture>_w<width>.png`, `geometry.json` (pane/chip bounding rects, the real
+**chip button** rect, theme vars actually resolved, rendered text, and the
+lifecycle steps). Build/capture/verify outputs are git-ignored — regenerate them.
+
+### Toolbar honesty (and the false-positive it kills)
+
+The old harness measured the 320px wrapper div, whose height can read `0` — a
+zero-height toolbar could "pass" while rendering nothing. `verify.mjs` now
+measures the plugin's **real chip `<button>`** and requires it to have positive
+width **and** height and stay inside the plugin's **230px production cap**
+(`maxWidth: 230`), and that the governing funding value (e.g. `5h 62%`, `$43.50`,
+`mo 0%`) is actually visible in that button's text — not ellipsized away.
+
+### Lifecycle scenario (priority regression)
+
+`harness/capture.mjs` additionally drives the REAL plugin through a full
+profile round-trip in real Chromium by rewriting the live SDK atoms and rest
+door over CDP:
+
+1. **default (with backend)** → genuine benefits on pane + toolbar;
+2. **a ChaosForge-like profile without the plugin backend** (`/overview` 404s) →
+   the pane says "isn't enabled or installed in chaosforge" AND the toolbar chip
+   says "not enabled in chaosforge", with **no** wrong-account figures and no
+   render error;
+3. **return to default** → the default account's rows come back (recovered).
+
+`verify.mjs` asserts all three steps on both surfaces.
 
 ## Fixtures
 
@@ -92,17 +125,33 @@ grid; narrow (420) stacks them — the layout is the plugin's own.
 ## Reproducing from a clean checkout
 
 ```bash
-node harness/build.mjs && node harness/capture.mjs
+npm ci
+node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
 ```
 
-`harness/dist/app.js` and `harness/dist/shots/*.png` are git-ignored build/capture
-outputs — regenerate, don't commit them.
+`harness/dist/app.js`, `harness/dist/*.html`, and `harness/dist/shots/*` are
+git-ignored build/capture outputs — regenerate, don't commit them.
+
+## What the stub models about the SDK
+
+The `host.state.*` atoms are reactive doubles (driven by `window.__FIXTURE__.host`
+at boot and by `window.__HARNESS__.set(...)` over CDP for lifecycle scripts), so
+the plugin's `useValue` subscriptions re-render for real. The focused-owner atom
+is exposed **always**, exactly like the current SDK; a present-but-null value
+means the SDK judged the focus ambiguous/unresolved, and the stub (and therefore
+the plugin) treats that as authoritative — never a profile-only fallback. The
+`useQuery` double caches rows per **serialized** query key — the same structural
+identity React Query uses — so cross-account isolation and
+"reconnecting keeps the last rows stale" are real in-browser behaviors, not
+reference-identity accidents.
 
 ## Limitations / honesty
 
 - This is a **component harness**, not a screenshot of the running desktop app.
   The pane is mounted full-bleed on the editor surface; the packaged app adds pane
-  chrome and a status-bar placement for the chip.
+  chrome and a status-bar placement for the chip. Nothing here proves the full
+  packaged-app integration (Electron shell, real gateway socket, real
+  per-profile backend routing) — that remains a live-app acceptance step.
 - Default SDK theme (light). It reflects the SDK's shipped default accent/palette,
   **not** whichever skin the user's live app is currently using.
 - `Tip` tooltips are stubbed (resting-state invisible); hover-popovers are not

@@ -90,14 +90,29 @@ hermes config get plugins.enabled
 
 Then run `hermes config set plugins.enabled` with the current entries plus `provider-usage`. Do not replace an existing list with the plugin name alone. Recycle the target Hermes gateway after changing the backend allow-list. In Desktop, enable **Provider Usage** under **Settings → Plugins** if it appears as opt-in.
 
+### Backend is per profile
+
+The Python backend (`dashboard/plugin_api.py`) is a **per-profile** install: it loads only when `provider-usage` is in that profile's `plugins.enabled` and its backend folder exists under that profile's `~/.hermes/profiles/<profile>/plugins/provider-usage/dashboard/`. A profile without the backend returns HTTP 404 for `/overview`, and the plugin says exactly that — **"Provider usage isn't enabled or installed in <profile>"** — on both the pane and the toolbar chip. It never auto-enables or auto-installs the backend, and never edits a real profile. If you use more than one profile, install and enable the backend in each profile where you want a usage readout.
+
+## Profile scoping & focus divergence
+
+`ctx.rest` reaches the **active** socket's profile and connection, never the focused chat's. The plugin treats a focused session as readable only when its connection-qualified owner (the SDK's `focusedSessionOwner` atom) matches that active source. When a focused chat belongs to a different profile or connection (or the SDK reports the focus as ambiguous), the plugin **fails closed**: the pane and chip gate with "The focused chat is in … — switch to view its usage" and issue no fetch or probe for a foreign account — home-account rows are never shown under another account's focus, even when two sources share a profile name. On return to a matching profile, the cached rows for that account come back.
+
 ## Development
 
-There are no npm dependencies.
+The shipped plugin file (`desktop/plugin.js`) is plain ESM with **no runtime npm dependencies**, but the dev/test toolchain does: `package.json` declares `devDependencies` `jsdom`, `react`, and `react-dom`, and the real-browser harness (see `harness/README.md`) bundles the plugin with the Hermes desktop SDK source for a faithful component render.
 
 ```bash
-npm run check
+npm ci          # install the devDependencies (jsdom, react, react-dom)
+npm run check   # plugin syntax + jsdom/render/scope/lifecycle suites + dashboard py_compile
 # or
 bash scripts/validate.sh
+```
+
+The browser component harness (real Chromium, real SDK primitives, per-fixture PNG evidence + a lifecycle assertion for the profile round-trip) is separate:
+
+```bash
+node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
 ```
 
 The fixture suite covers:

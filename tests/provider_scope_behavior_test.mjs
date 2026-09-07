@@ -74,6 +74,7 @@ function check(name, condition) {
 // Normal single-socket genuine profile-switch case: focus owner == active source.
 const plain = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
+  hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: 'local',
   activeProfile: 'Alice'
@@ -84,13 +85,15 @@ check('focus==active: focusProfile preserved', plain.focusProfile === 'Alice')
 check('focus==active: source is active', plain.source === 'active')
 check('focus==active: sourceId is connection-qualified', activeSourceId('local', 'Alice') === plain.sourceId)
 
-// Legacy desktop: only the profile atom present, == active, single-connection.
-const legacy = resolveUsageScope({ focusedOwner: null, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' })
+// Legacy desktop: only the profile atom present (NO focus-owner atom), == active,
+// single-connection.
+const legacy = resolveUsageScope({ focusedOwner: null, hasFocusedOwner: false, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' })
 check('legacy focus==active: fetch active, not diverged', legacy.fetchProfile === 'default' && legacy.diverged === false)
 
 // Divergence: focused bot tile on Alice, socket homed on default.
 const diverged = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
+  hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: 'local',
   activeProfile: 'default'
@@ -104,6 +107,7 @@ check('focus!=active: focus identity preserved for the gate', diverged.focusProf
 // Alice account. Connection qualification must catch it.
 const sameProfileRemote = resolveUsageScope({
   focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' },
+  hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: 'remote-main',
   activeProfile: 'Alice'
@@ -114,6 +118,7 @@ check('#1 same-profile remote: never guesses same account', sameProfileRemote.so
 // #1 FAIL-CLOSED: active source identity unavailable -> cannot verify focus.
 const unverifiable = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
+  hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: '',
   activeProfile: 'Alice'
@@ -121,12 +126,24 @@ const unverifiable = resolveUsageScope({
 check('#1 unverifiable active source: fail closed -> DIVERGED', unverifiable.diverged === true)
 check('#1 unverifiable: never serves data under an unverified account', unverifiable.source === 'foreign')
 
+// Authoritative ambiguity: the SDK publishes the owner atom but its value is
+// null (unresolved/ambiguous focused id) — the profile-only fallback must NOT
+// be allowed to guess, even when focusedSessionProfile names a profile.
+const ambiguous = resolveUsageScope({
+  focusedOwner: null,
+  hasFocusedOwner: true,
+  focusedProfile: 'Alice',
+  activeConnectionId: 'local',
+  activeProfile: 'default'
+})
+check('#10 present-but-null focus owner fails closed (never profile-only bypass)', ambiguous.diverged === true && ambiguous.source === 'ambiguous')
+
 // Absent legacy half-shape: focusedProfile missing entirely -> active wins.
-const absent = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeConnectionId: 'worker', activeProfile: 'worker' })
+const absent = resolveUsageScope({ focusedOwner: null, hasFocusedOwner: false, focusedProfile: '', activeConnectionId: 'worker', activeProfile: 'worker' })
 check('no focus atoms: fall back to active profile, not diverged', absent.fetchProfile === 'worker' && absent.focusProfile === 'worker' && absent.diverged === false)
 
 // Empty/whitespace active profile normalizes.
-const emptyActive = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeConnectionId: '', activeProfile: '   ' })
+const emptyActive = resolveUsageScope({ focusedOwner: null, hasFocusedOwner: false, focusedProfile: '', activeConnectionId: '', activeProfile: '   ' })
 check('blank active profile normalizes to default', emptyActive.fetchProfile === 'default')
 
 // ── Profile-switch detection: never infer a switch from socket state alone ──
