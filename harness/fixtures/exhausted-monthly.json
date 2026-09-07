@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "fetched_at": "2026-09-07T12:00:00Z",
+  "active": { "provider": "xai-oauth", "model": "grok-4-compute-1" },
+  "default_provider": "xai-oauth",
+  "providers": [
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "subscription",
+      "limits": [
+        {
+          "id": "default",
+          "label": "SuperGrok",
+          "windows": [
+            { "label": "5-hour window", "remaining_percent": 30, "reset_at": "2026-09-07T13:30:00Z" },
+            { "label": "Monthly window", "remaining_percent": 0, "reset_at": "2026-10-01T00:00:00Z", "detail": "Monthly allowance fully used." }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": []
+    },
+    {
+      "id": "openai-codex",
+      "label": "OpenAI Codex",
+      "available": true,
+      "plan": "Plus",
+      "capability": "subscription",
+      "limits": [
+        {
+          "id": "default",
+          "label": "Codex Plus",
+          "windows": [
+            { "label": "5-hour window", "remaining_percent": 0, "reset_at": "2026-09-07T13:30:00Z", "detail": "Session window fully used." },
+            { "label": "7-day window", "remaining_percent": 72, "reset_at": "2026-09-11T00:00:00Z" }
+          ]
+        }
+      ],
+      "balances": [
+        { "label": "Extra usage", "amount": 0, "currency": "USD", "granted": 0, "used": 0 }
+      ],
+      "details": []
+    },
+    {
+      "id": "openrouter",
+      "label": "OpenRouter",
+      "available": false,
+      "unavailable_reason": "No API key configured for this profile."
+    }
+  ]
+}

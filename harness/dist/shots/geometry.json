@@ -1,0 +1,756 @@
+{
+  "compact-5h-wk_w420": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 420,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 445
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "Anthropic / Claude",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 133.4375,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 511,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "progressbars": {
+        "tag": "div",
+        "text": "",
+        "rect": {
+          "x": 18,
+          "y": 304.828125,
+          "w": 183,
+          "h": 4
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.0389483 0.223886 0.607754 / 0.088)",
+        "fontSize": "12px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 362.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "DeepSeekAPI credits$5.31",
+        "rect": {
+          "x": 18,
+          "y": 533,
+          "w": 384,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMAnthropic / Claudeclaude-4-9-so",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 420,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 420,
+        "height": 1500,
+        "top": 0,
+        "right": 420,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nAnthropic / Claude\nclaude-4-9-sonnet\nACTIVE\nCURRENT REQUEST FUNDING\n5h 62% · wk 84%\nPro subscription allowance\nACCOUNT LIMITS & CREDITS\nPro\nLIMITS\n1 limit group\nPro subscription\n5-hour window\n62% left\nResets Mon, Sep 7, 8:30 AM\n7-day window\n84% left\nResets Tue, Sep 8, 7:00 PM\nACCOUNT NOTES\nSubscription renews 10/1/2026, 7\n00:00 PM\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nDeepSeek\nAPI credits\n$5.31\nLimited data (1)\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Claude · 5h 62% · wk 84%",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"Anthropic / Claude: 5h 62% · wk 84%. Active model claude-4-9-sonnet. Open the"
+  },
+  "compact-5h-wk_w760": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 760,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 785
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "Anthropic / Claude",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 133.4375,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 481.109375,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "progressbars": {
+        "tag": "div",
+        "text": "",
+        "rect": {
+          "x": 18,
+          "y": 304.828125,
+          "w": 353,
+          "h": 4
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.0389483 0.223886 0.607754 / 0.088)",
+        "fontSize": "12px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 702.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "DeepSeekAPI credits$5.31",
+        "rect": {
+          "x": 18,
+          "y": 503.109375,
+          "w": 724,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMAnthropic / Claudeclaude-4-9-so",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 760,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 760,
+        "height": 1500,
+        "top": 0,
+        "right": 760,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nAnthropic / Claude\nclaude-4-9-sonnet\nACTIVE\nCURRENT REQUEST FUNDING\n5h 62% · wk 84%\nPro subscription allowance\nACCOUNT LIMITS & CREDITS\nPro\nLIMITS\n1 limit group\nPro subscription\n5-hour window\n62% left\nResets Mon, Sep 7, 8:30 AM\n7-day window\n84% left\nResets Tue, Sep 8, 7:00 PM\nACCOUNT NOTES\nSubscription renews 10/1/2026, 7\n00:00 PM\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nDeepSeek\nAPI credits\n$5.31\nLimited data (1)\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Claude · 5h 62% · wk 84%",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"Anthropic / Claude: 5h 62% · wk 84%. Active model claude-4-9-sonnet. Open the"
+  },
+  "credit-balance_w420": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 420,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 445
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "Nous Portal",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 83.34375,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 477.828125,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 362.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "SuperGrok / xAI OAuthSuperGrok58% left",
+        "rect": {
+          "x": 18,
+          "y": 499.828125,
+          "w": 384,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMNous Portalgrok-4-compute-1ACTI",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 420,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 420,
+        "height": 1500,
+        "top": 0,
+        "right": 420,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nNous Portal\ngrok-4-compute-1\nACTIVE\nCURRENT REQUEST FUNDING\n$43.50\nRequests are billed from this provider balance.\nACCOUNT LIMITS & CREDITS\nAPI credits\nBALANCE\nAPI BALANCE\n$43.50\n$6.50 used of $50.00 • $50.00 granted • Expires 11/30/2026, 6:00:00 PM\nACCOUNT NOTES\nSubscription renewal date is not exposed by this provider.\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nSuperGrok / xAI OAuth\nSuperGrok\n58% left\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Nous · $43.50",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"Nous Portal: $43.50. Active model grok-4-compute-1. Open the Provider Usage p"
+  },
+  "credit-balance_w760": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 760,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 785
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "Nous Portal",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 83.34375,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 463.328125,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 702.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "SuperGrok / xAI OAuthSuperGrok58% left",
+        "rect": {
+          "x": 18,
+          "y": 485.328125,
+          "w": 724,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMNous Portalgrok-4-compute-1ACTI",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 760,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 760,
+        "height": 1500,
+        "top": 0,
+        "right": 760,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nNous Portal\ngrok-4-compute-1\nACTIVE\nCURRENT REQUEST FUNDING\n$43.50\nRequests are billed from this provider balance.\nACCOUNT LIMITS & CREDITS\nAPI credits\nBALANCE\nAPI BALANCE\n$43.50\n$6.50 used of $50.00 • $50.00 granted • Expires 11/30/2026, 6:00:00 PM\nACCOUNT NOTES\nSubscription renewal date is not exposed by this provider.\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nSuperGrok / xAI OAuth\nSuperGrok\n58% left\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Nous · $43.50",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"Nous Portal: $43.50. Active model grok-4-compute-1. Open the Provider Usage p"
+  },
+  "exhausted-monthly_w420": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 420,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 445
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "SuperGrok / xAI OAuth",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 163.296875,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 511,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "progressbars": {
+        "tag": "div",
+        "text": "",
+        "rect": {
+          "x": 18,
+          "y": 309.953125,
+          "w": 183,
+          "h": 4
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.0389483 0.223886 0.607754 / 0.088)",
+        "fontSize": "12px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 362.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "OpenAI CodexPlus$0.00 extra",
+        "rect": {
+          "x": 18,
+          "y": 533,
+          "w": 384,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMSuperGrok / xAI OAuthgrok-4-com",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 420,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 420,
+        "height": 1500,
+        "top": 0,
+        "right": 420,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nSuperGrok / xAI OAuth\ngrok-4-compute-1\nACTIVE\nCURRENT REQUEST FUNDING\n5h 30% · mo 0%\nSuperGrok subscription allowance\nACCOUNT LIMITS & CREDITS\nSuperGrok\nLIMITS\n1 limit group\nSuperGrok\n5-hour window\n30% left\nResets Mon, Sep 7, 8:30 AM\nMonthly window\n0% left\nResets Wed, Sep 30, 7:00 PM • Monthly allowance fully used.\nACCOUNT NOTES\nSubscription renewal date is not exposed by this provider.\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nOpenAI Codex\nPlus\n$0.00 extra\nLimited data (1)\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Grok · 5h 30% · mo 0%",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"SuperGrok / xAI OAuth: 5h 30% · mo 0%. Active model grok-4-compute-1. Open th"
+  },
+  "exhausted-monthly_w760": {
+    "registered": {
+      "id": "provider-usage",
+      "name": "Provider Usage"
+    },
+    "paneRect": {
+      "width": 760,
+      "height": 1500,
+      "top": 0,
+      "left": 0
+    },
+    "chipRect": {
+      "width": 310,
+      "height": 0,
+      "top": 15,
+      "left": 785
+    },
+    "geometry": {
+      "activeProviderHeading": {
+        "tag": "h2",
+        "text": "SuperGrok / xAI OAuth",
+        "rect": {
+          "x": 31,
+          "y": 79.546875,
+          "w": 163.296875,
+          "h": 19.5
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "15px"
+      },
+      "accountsHeading": {
+        "tag": "h2",
+        "text": "Other providers",
+        "rect": {
+          "x": 18,
+          "y": 481.109375,
+          "w": 109.0625,
+          "h": 15.390625
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "11px"
+      },
+      "progressbars": {
+        "tag": "div",
+        "text": "",
+        "rect": {
+          "x": 18,
+          "y": 304.828125,
+          "w": 353,
+          "h": 4
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.0389483 0.223886 0.607754 / 0.088)",
+        "fontSize": "12px"
+      },
+      "sectionLabels": {
+        "tag": "h3",
+        "text": "Account limits & credits",
+        "rect": {
+          "x": 18,
+          "y": 210.9375,
+          "w": 153.671875,
+          "h": 14
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.54)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "10px"
+      },
+      "badges": {
+        "tag": "span",
+        "text": "ACTIVE",
+        "rect": {
+          "x": 702.5,
+          "y": 79.546875,
+          "w": 39.5,
+          "h": 16.390625
+        },
+        "color": "rgb(0, 83, 253)",
+        "bg": "oklab(0.527864 -0.0327826 -0.257344 / 0.1)",
+        "fontSize": "9.6px"
+      },
+      "rowButtons": {
+        "tag": "button",
+        "text": "OpenAI CodexPlus$0.00 extra",
+        "rect": {
+          "x": 18,
+          "y": 503.109375,
+          "w": 724,
+          "h": 57
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "rgba(0, 0, 0, 0)",
+        "fontSize": "12px"
+      },
+      "panes": {
+        "tag": "div",
+        "text": "Provider usageUpdated 7:00 AMSuperGrok / xAI OAuthgrok-4-com",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 760,
+          "h": 1500
+        },
+        "color": "color(srgb 0.0901961 0.0901961 0.101961 / 0.94)",
+        "bg": "color(srgb 0.990824 0.990824 0.990824)",
+        "fontSize": "13px"
+      },
+      "resolvedVars": {
+        "accent": "#0053fd",
+        "destructive": "#cf2d56",
+        "textPrimary": "color-mix(in srgb, #17171a 94%, transparent)",
+        "surfaceBg": "color-mix(in srgb, #fff 22%, #fcfcfc)"
+      },
+      "paneBoundingRect": {
+        "x": 0,
+        "y": 0,
+        "width": 760,
+        "height": 1500,
+        "top": 0,
+        "right": 760,
+        "bottom": 1500,
+        "left": 0
+      }
+    },
+    "text": "Provider usage\nUpdated 7:00 AM\nSuperGrok / xAI OAuth\ngrok-4-compute-1\nACTIVE\nCURRENT REQUEST FUNDING\n5h 30% · mo 0%\nSuperGrok subscription allowance\nACCOUNT LIMITS & CREDITS\nSuperGrok\nLIMITS\n1 limit group\nSuperGrok\n5-hour window\n30% left\nResets Mon, Sep 7, 8:30 AM\nMonthly window\n0% left\nResets Wed, Sep 30, 7:00 PM • Monthly allowance fully used.\nACCOUNT NOTES\nSubscription renewal date is not exposed by this provider.\nPRICING & DEMAND\nThis provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.\nOTHER PROVIDERS\n1 reporting\nOpenAI Codex\nPlus\n$0.00 extra\nLimited data (1)\nCredentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.",
+    "chipText": "Grok · 5h 30% · mo 0%",
+    "chipHtml": "<div data-harness-surface=\"1\" style=\"height: 100%; width: 100%; background: var(--ui-bg-editor); color: var(--ui-text-primary); font-family: var(--default-font-family, system-ui, sans-serif); font-size: 13px;\"><span title=\"SuperGrok / xAI OAuth: 5h 30% · mo 0%. Active model grok-4-compute-1. Open th"
+  }
+}

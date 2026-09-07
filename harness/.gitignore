@@ -1,0 +1,5 @@
+# Build/capture outputs — regenerate, do not commit.
+dist/app.js
+dist/*.html
+static-hermes-sdk.css
+src/entry.js

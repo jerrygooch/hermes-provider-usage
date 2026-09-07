@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "fetched_at": "2026-09-07T12:00:00Z",
+  "active": { "provider": "anthropic", "model": "claude-4-9-sonnet" },
+  "default_provider": "anthropic",
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic / Claude",
+      "available": true,
+      "plan": "Pro",
+      "capability": "subscription",
+      "limits": [
+        {
+          "id": "default",
+          "label": "Pro subscription",
+          "windows": [
+            { "label": "5-hour window", "remaining_percent": 62, "reset_at": "2026-09-07T13:30:00Z" },
+            { "label": "7-day window", "remaining_percent": 84, "reset_at": "2026-09-09T00:00:00Z" }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": [],
+      "renewal_at": "2026-10-02T00:00:00Z"
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "available": true,
+      "plan": "API credits",
+      "capability": "balance",
+      "limits": [],
+      "balances": [
+        { "label": "API balance", "amount": 5.31, "currency": "USD", "granted": 10, "used": 4.69, "total": 10 }
+      ],
+      "details": []
+    },
+    {
+      "id": "nous",
+      "label": "Nous Portal",
+      "available": false,
+      "unavailable_reason": "No Portal OAuth session on this profile."
+    }
+  ]
+}

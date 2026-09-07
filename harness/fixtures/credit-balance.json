@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "fetched_at": "2026-09-07T12:00:00Z",
+  "active": { "provider": "nous", "model": "grok-4-compute-1" },
+  "default_provider": "nous",
+  "providers": [
+    {
+      "id": "nous",
+      "label": "Nous Portal",
+      "available": true,
+      "plan": "API credits",
+      "capability": "balance",
+      "limits": [],
+      "balances": [
+        {
+          "label": "API balance",
+          "amount": 43.5,
+          "currency": "USD",
+          "granted": 50,
+          "used": 6.5,
+          "total": 50,
+          "expires_at": "2026-12-01T00:00:00Z"
+        }
+      ],
+      "details": []
+    },
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "subscription",
+      "limits": [
+        { "id": "default", "label": "SuperGrok", "windows": [{ "label": "Subscription window", "remaining_percent": 58, "reset_at": "2026-09-14T00:00:00Z" }] }
+      ],
+      "balances": [],
+      "details": []
+    }
+  ]
+}
