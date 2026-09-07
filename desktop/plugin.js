@@ -12,7 +12,7 @@ import {
   useValue
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const REFRESH_MS = 60_000
 const HAIRLINE = '1px solid var(--ui-stroke-tertiary)'
@@ -21,35 +21,13 @@ const textSecondary = { color: 'var(--ui-text-secondary)' }
 const textTertiary = { color: 'var(--ui-text-tertiary)' }
 const textQuaternary = { color: 'var(--ui-text-quaternary)' }
 const lastFocusedProviders = new Map()
+// A real profile swap settles on readiness, or after this bounded window when
+// the new backend is slow — never an infinite "switching profile" spinner.
+const PROFILE_SETTLE_MS = 12_000
 
 function profileScope(profile) {
   const value = String(profile || '').trim()
   return value || '__active__'
-}
-
-function rememberedProvider(profile) {
-  return lastFocusedProviders.get(profileScope(profile)) || ''
-}
-
-function providerScopeKey(profile, sessionId) {
-  return `${profileScope(profile)}::${String(sessionId || '__workspace__')}`
-}
-
-function providerUsageQueryKey(profile, sessionId, provider, model, gateway) {
-  return [
-    'provider-usage',
-    'overview',
-    profileScope(profile),
-    String(sessionId || ''),
-    provider || '',
-    model || '',
-    gateway || ''
-  ]
-}
-
-function gatewayReady(gateway) {
-  const state = String(gateway || '').toLowerCase()
-  return !state || state === 'open' || state === 'connected' || state === 'ready'
 }
 
 function normaliseProvider(value) {
@@ -63,6 +41,64 @@ function normaliseProvider(value) {
   return text
 }
 
+function rememberProvider(profile, provider) {
+  const resolved = normaliseProvider(provider)
+  if (resolved) lastFocusedProviders.set(profileScope(profile), resolved)
+  return resolved
+}
+
+function rememberedProvider(profile) {
+  return lastFocusedProviders.get(profileScope(profile)) || ''
+}
+
+function providerScopeKey(profile, sessionId) {
+  return `${profileScope(profile)}::${String(sessionId || '__workspace__')}`
+}
+
+// The plugin's REST door (ctx.rest) routes on the ACTIVE socket connection and
+// profile — it cannot be pinned to the FOCUSED chat's profile. So the fetched
+// and cached scope is always the ACTIVE profile. A focused session that lives in
+// another profile (a bot tile / multi-profile focus without a socket swap) is a
+// labeling concern (diverged), never a reason to key the cache under a profile
+// ctx.rest cannot reach.
+function resolveUsageScope({ focusedOwner, focusedProfile, activeProfile }) {
+  const alias = String(focusedProfile || '').trim()
+  const focus = focusedOwner && typeof focusedOwner.profile === 'string' && focusedOwner.profile.trim()
+    ? focusedOwner.profile.trim()
+    : alias
+  const active = String(activeProfile || '').trim() || 'default'
+  return { fetchProfile: active, focusProfile: focus || active, diverged: Boolean(focus) && focus !== active }
+}
+
+function providerUsageQueryKey(fetchProfile, provider, model, gateway) {
+  return [
+    'provider-usage',
+    'overview',
+    profileScope(fetchProfile),
+    provider || '',
+    model || '',
+    gateway || ''
+  ]
+}
+
+function gatewayReady(gateway) {
+  const state = String(gateway || '').toLowerCase()
+  return !state || state === 'open' || state === 'connected' || state === 'ready'
+}
+
+// Profile-switch detection: ONLY a change in the ACTIVE profile value is a
+// switch. A closed/reconnecting socket against the same profile is a
+// reconnection, never a "switching profile" story.
+function shouldEnterProfileSwitch(prevProfile, profile) {
+  return profileScope(prevProfile) !== profileScope(profile)
+}
+
+function shouldSettleProfileSwitch(gatewayNowReady, switching, elapsedMs, settleMs) {
+  if (!switching) return false
+  if (gatewayNowReady) return true
+  return elapsedMs >= settleMs
+}
+
 function payloadFromResponse(response) {
   return response?.payload || response?.result?.payload || response?.result || response?.data || response || {}
 }
@@ -71,12 +107,15 @@ function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
   const scope = providerScopeKey(ownerProfile, sessionId)
   const [state, setState] = useState(() => ({
     scope,
-    provider: normaliseProvider(initialProvider) || rememberedProvider(ownerProfile)
+    provider: rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
   }))
 
   useEffect(() => {
     let alive = true
-    const seed = sessionId ? normaliseProvider(initialProvider) : rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
+    // Prefer the OWNING profile's remembered provider. `initialProvider` is only
+    // an open-time hint — it must never override a real per-profile memory or
+    // leak across a profile switch into a scope it never belonged to.
+    const seed = rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
     setState({ scope, provider: seed })
     const accept = payload => {
       const statusMatch = typeof payload?.output === 'string'
@@ -84,9 +123,8 @@ function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
         : null
       const value = payload?.provider || payload?.info?.provider || statusMatch?.[1]
       if (typeof value === 'string' && value.trim() && alive) {
-        const resolved = normaliseProvider(value)
-        lastFocusedProviders.set(profileScope(ownerProfile), resolved)
-        setState({ scope, provider: resolved })
+        const resolved = rememberProvider(ownerProfile, value)
+        if (resolved) setState({ scope, provider: resolved })
       }
     }
 
@@ -116,9 +154,9 @@ function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
   return state.scope === scope ? state.provider : ''
 }
 
-function useOverview(ctx, provider, model, ownerProfile, sessionId, gateway) {
+function useOverview(ctx, provider, model, fetchProfile, gateway) {
   return useQuery({
-    queryKey: providerUsageQueryKey(ownerProfile, sessionId, provider, model, gateway),
+    queryKey: providerUsageQueryKey(fetchProfile, provider, model, gateway),
     queryFn: () =>
       ctx.rest('/overview', {
         method: 'POST',
@@ -130,6 +168,43 @@ function useOverview(ctx, provider, model, ownerProfile, sessionId, gateway) {
     refetchInterval: REFRESH_MS,
     retry: 1
   })
+}
+
+// A real profile swap (the ACTIVE profile value changed) is "switching". It
+// settles as soon as the gateway is ready again, or after the bounded
+// PROFILE_SETTLE_MS window. A merely reconnecting socket on the SAME profile is
+// never labelled a switch.
+function useSwitchingOverride(profile, gatewayNowReady) {
+  const [switching, setSwitching] = useState(false)
+  const lastProfile = useRef(profileScope(profile))
+  const enteredAt = useRef(0)
+
+  useEffect(() => {
+    if (shouldEnterProfileSwitch(lastProfile.current, profile)) {
+      lastProfile.current = profileScope(profile)
+      enteredAt.current = Date.now()
+      setSwitching(true)
+    }
+  }, [profile])
+
+  useEffect(() => {
+    if (shouldSettleProfileSwitch(gatewayNowReady, switching, Date.now() - enteredAt.current, PROFILE_SETTLE_MS)) {
+      setSwitching(false)
+    }
+  }, [gatewayNowReady, switching])
+
+  useEffect(() => {
+    if (!switching) return undefined
+    const remaining = Math.max(0, PROFILE_SETTLE_MS - (Date.now() - enteredAt.current))
+    if (remaining <= 0) {
+      setSwitching(false)
+      return undefined
+    }
+    const timer = setTimeout(() => setSwitching(false), remaining)
+    return () => clearTimeout(timer)
+  }, [switching, profile])
+
+  return switching
 }
 
 function providerRow(data, provider) {
@@ -306,25 +381,41 @@ function compactFundingSummary(row, model) {
 function statusFundingSummary(row, model) {
   const state = fundingState(row, model)
   if (row?.id === 'opencode-go' && state.kind === 'subscription') {
-    const primaryWindows = state.windows.filter(window => {
+    const { windows } = state
+    // Compact to the revenue-relevant 5-hour + weekly meters, but never HIDE an
+    // exhausted window: an exhausted Monthly still blocks requests, so it must
+    // stay visible even though a healthy monthly is compressed away.
+    const primary = windows.filter(window => {
       const label = shortWindowLabel(window)
       return label === '5h' || label === 'wk'
     })
-    if (primaryWindows.length > 0) {
-      return primaryWindows
-        .map(window => `${shortWindowLabel(window)} ${round(window.remaining_percent)}%`)
-        .join(' · ')
+    if (primary.length > 0) {
+      const primaryPart = primary.map(window => `${shortWindowLabel(window)} ${round(window.remaining_percent)}%`)
+      const exhaustedOthers = windows.filter(window => {
+        const label = shortWindowLabel(window)
+        return label !== '5h' && label !== 'wk' && round(window?.remaining_percent) != null && round(window.remaining_percent) <= 0
+      })
+      const extra = exhaustedOthers.map(window => `${shortWindowLabel(window)} 0%`)
+      return [...primaryPart, ...extra].join(' · ')
     }
   }
   return compactFundingSummary(row, model)
 }
 
-function chipDescription(row, model, data, switching = false) {
-  if (switching) return 'Switching profile. Provider usage will refresh when the connection is ready.'
+function chipDescription(row, model, data, switching, ready, scope) {
+  if (switching) return `Switching profile — ${scope.fetchProfile} usage will refresh when the new profile is ready.`
   const updated = data?.fetched_at ? new Date(data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet'
-  if (!row) return `Provider usage. Last updated ${updated}.`
+  const stateNote = scope?.diverged
+    ? ` Shows ${scope.fetchProfile} profile usage; the focused chat is in ${scope.focusProfile}.`
+    : ''
+  if (!ready) {
+    return row
+      ? `Provider usage for ${scope.fetchProfile} is from ${updated}; reconnecting.${stateNote}`
+      : `Provider usage for ${scope.fetchProfile}. Reconnecting.${stateNote}`
+  }
+  if (!row) return `Provider usage for ${scope.fetchProfile}. Last updated ${updated}.${stateNote}`
   const modelName = model ? ` Active model ${model}.` : ''
-  return `${row.label}: ${statusFundingSummary(row, model)}.${modelName} Open the Provider Usage pane for every reported window. Updated ${updated}.`
+  return `${row.label}: ${statusFundingSummary(row, model)}.${modelName}${stateNote} Open the Provider Usage pane for every reported window. Updated ${updated}.`
 }
 
 function formatReset(value) {
@@ -829,12 +920,15 @@ function LimitedProviders({ rows }) {
   })
 }
 
-function openOverview(ctx, initialProvider) {
+function openOverview(ctx, fetchProfile, initialProvider) {
+  // Scope the open-time provider hint to the profile the pane will actually
+  // query (the active socket's), so it never leaks across a later switch.
+  if (initialProvider) rememberProvider(fetchProfile, initialProvider)
   if (typeof host.openWorkspace === 'function') {
     host.openWorkspace('provider-usage-overview', {
       title: 'Provider usage',
       minWidth: 400,
-      render: () => jsx(ProviderUsagePane, { ctx, initialProvider })
+      render: () => jsx(ProviderUsagePane, { ctx })
     })
     return
   }
@@ -844,18 +938,26 @@ function openOverview(ctx, initialProvider) {
 function ActiveUsageChip({ ctx }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
-  const focusedProfile = useValue(host.state.focusedSessionProfile)
-  const profile = useValue(host.state.profile)
+  const activeProfile = useValue(host.state.profile)
+  const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
+  const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
-  const ownerProfile = focusedProfile || profile || ''
-  const switching = !gatewayReady(gateway)
-  const provider = useActiveProvider(sessionId, '', ownerProfile)
-  const query = useOverview(ctx, provider, model, ownerProfile, sessionId, gateway)
+  const ready = gatewayReady(gateway)
+  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeProfile })
+  const provider = useActiveProvider(sessionId, '', scope.fetchProfile)
+  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway)
   const row = activeRow(query.data, provider)
   const state = fundingState(row, model)
+  const switching = useSwitchingOverride(scope.fetchProfile, ready)
   const label = row ? compactProviderLabel(row) : 'Usage'
-  const summary = switching ? 'switching' : query.isLoading && !row ? 'checking' : row ? statusFundingSummary(row, model) : 'unavailable'
-  const description = chipDescription(row, model, query.data, switching)
+
+  let summary = 'unavailable'
+  if (switching) summary = 'switching'
+  else if (row) summary = statusFundingSummary(row, model)
+  else if (ready) summary = query.isLoading ? 'checking' : 'unavailable'
+
+  const scopeLabel = scope.diverged ? `· ${scope.fetchProfile}` : ''
+  const description = chipDescription(row, model, query.data, switching, ready, scope)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
 
   return jsx(Tip, {
@@ -867,12 +969,12 @@ function ActiveUsageChip({ ctx }) {
       'aria-label': description,
       onClick: () => {
         haptic('tap')
-        openOverview(ctx, provider || row?.id)
+        openOverview(ctx, scope.fetchProfile, provider || row?.id)
       },
       style: { maxWidth: 230, fontVariantNumeric: 'tabular-nums' },
       children: [
         jsx(Icon, { 'aria-hidden': true }),
-        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` })
+        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label}${scopeLabel} · ${summary}` })
       ]
     })
   })
@@ -881,95 +983,151 @@ function ActiveUsageChip({ ctx }) {
 function ProviderUsagePane({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
-  const storedSessionId = useValue(host.state.focusedStoredSessionId)
-  const focusedProfile = useValue(host.state.focusedSessionProfile)
-  const profile = useValue(host.state.profile)
+  const activeProfile = useValue(host.state.profile)
+  const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
+  const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
-  const ownerProfile = focusedProfile || profile || ''
-  const switching = !gatewayReady(gateway)
-  const provider = useActiveProvider(sessionId, initialProvider, ownerProfile)
-  const query = useOverview(ctx, provider, model, ownerProfile, storedSessionId || sessionId, gateway)
+  const ready = gatewayReady(gateway)
+  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeProfile })
+  const switching = useSwitchingOverride(scope.fetchProfile, ready)
+  const provider = useActiveProvider(sessionId, initialProvider, scope.fetchProfile)
+  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway)
   const rawRows = Array.isArray(query.data?.providers) ? query.data.providers : []
   const rows = mergeOpenCodeRows(rawRows, provider)
   const selected = activeRow({ ...query.data, providers: rows }, provider)
   const activeId = selected?.id || normaliseProvider(query.data?.active?.provider)
   const available = rows.filter(row => row.available && row.id !== activeId)
   const limited = rows.filter(row => !row.available && row.id !== activeId)
+  const hasRows = rows.length > 0
+
+  const scopeSubtitle = [
+    `Scope ${scope.fetchProfile}`,
+    scope.diverged ? `focused ${scope.focusProfile}` : null,
+    hasRows ? formatUpdated(query.data?.fetched_at) : null
+  ].filter(Boolean).join(' · ')
+
+  const refreshButton = jsx(Tip, {
+    label: query.isFetching ? 'Refreshing provider usage' : 'Refresh provider usage',
+    children: jsx(Button, {
+      type: 'button',
+      variant: 'ghost',
+      size: 'icon-xs',
+      disabled: query.isFetching || !ready,
+      'aria-label': 'Refresh provider usage',
+      onClick: () => {
+        haptic('tap')
+        void query.refetch()
+      },
+      children: jsx(icons.RefreshCw, { 'aria-hidden': true })
+    })
+  })
+
+  const header = jsxs('header', {
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 18px', borderBottom: HAIRLINE },
+    children: [
+      jsxs('div', {
+        style: { minWidth: 0, display: 'grid', gap: 2 },
+        children: [
+          jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }),
+          jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: scopeSubtitle })
+        ]
+      }),
+      refreshButton
+    ]
+  })
+
+  // Honest recovery states — a real profile swap loads; a mere reconnect keeps
+  // the last data visible (stale) instead of wiping to a full-screen loader.
+  const reconnectBanner = switching || !ready
+    ? jsx('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 9, padding: '8px 18px', borderBottom: HAIRLINE, background: 'var(--ui-bg-tertiary)' },
+        children: [
+          jsx(StatusDot, { tone: switching ? 'muted' : 'warn' }),
+          jsx('span', {
+            style: { ...textSecondary, fontSize: 11, lineHeight: 1.4 },
+            children: switching
+              ? `Switching profile — refreshing ${scope.fetchProfile} usage when the new profile is ready.`
+              : `Reconnecting — showing ${scope.fetchProfile} usage from ${hasRows ? formatUpdated(query.data?.fetched_at) : 'earlier'}.`
+          })
+        ]
+      })
+    : null
+
+  const divergenceNote = scope.diverged
+    ? jsx('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 9, padding: '8px 18px', borderBottom: HAIRLINE, background: 'var(--ui-bg-tertiary)' },
+        children: [
+          jsx('span', {
+            style: { ...textTertiary, fontSize: 10, lineHeight: 1.4 },
+            children: `The focused chat is in ${scope.focusProfile}. Provider Usage shows the active ${scope.fetchProfile} profile's usage, which ctx.rest can reach; it is not fetched from ${scope.focusProfile} until that profile is the active socket.`
+          })
+        ]
+      })
+    : null
+
+  let body
+  if (switching && !hasRows) {
+    body = jsx('div', { style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center' }, children: jsx(Loader, { type: 'lemniscate-bloom', label: `Switching to ${scope.fetchProfile}`, style: { width: 58 } }) })
+  } else if (!switching && !ready && !hasRows) {
+    body = jsxs('div', {
+      style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center', textAlign: 'center', gap: 10 },
+      children: [
+        jsx(StatusDot, { tone: 'warn', style: { width: 10, height: 10 } }),
+        jsx('strong', { style: { ...textSecondary, fontSize: 12, fontWeight: 600 }, children: 'Reconnecting' }),
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: `Provider usage for ${scope.fetchProfile} will load when the connection is ready.` })
+      ]
+    })
+  } else if (!switching && ready && query.isLoading && !hasRows) {
+    body = jsx('div', { style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center' }, children: jsx(Loader, { type: 'lemniscate-bloom', label: 'Checking provider accounts', style: { width: 58 } }) })
+  } else if (!switching && ready && query.isError && !hasRows) {
+    body = jsxs('div', {
+      style: { padding: 24, display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12 },
+      children: [
+        jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
+        jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }),
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }),
+        jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' })
+      ]
+    })
+  } else {
+    body = jsxs('div', {
+      style: { height: 'calc(100% - 58px)', overflowY: 'auto', overflowX: 'hidden' },
+      children: [
+        reconnectBanner,
+        divergenceNote,
+        selected ? jsx(ActiveProvider, { row: selected, model }) : null,
+        jsxs('section', {
+          'aria-labelledby': 'provider-usage-accounts-heading',
+          style: { padding: '15px 18px 18px' },
+          children: [
+            jsxs('div', {
+              style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingBottom: 6 },
+              children: [
+                jsx('h2', { id: 'provider-usage-accounts-heading', style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Other providers' }),
+                jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: `${available.length} reporting` })
+              ]
+            }),
+            available.length > 0
+              ? available.map(row => jsx(ProviderDisclosure, { key: row.id, row }))
+              : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }),
+            jsx(LimitedProviders, { rows: limited }),
+            jsx('footer', {
+              style: { ...textQuaternary, fontSize: 9, lineHeight: 1.45, paddingTop: 14 },
+              children: `Credentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.`
+            })
+          ]
+        })
+      ]
+    })
+  }
 
   return jsxs('div', {
     style: { height: '100%', minWidth: 0, overflow: 'hidden', color: 'var(--ui-text-primary)', fontSize: 12 },
-    children: [
-      jsxs('header', {
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 18px', borderBottom: HAIRLINE },
-        children: [
-          jsxs('div', {
-            style: { minWidth: 0, display: 'grid', gap: 2 },
-            children: [
-              jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }),
-              jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: formatUpdated(query.data?.fetched_at) })
-            ]
-          }),
-          jsx(Tip, {
-            label: query.isFetching ? 'Refreshing provider usage' : 'Refresh provider usage',
-            children: jsx(Button, {
-              type: 'button',
-              variant: 'ghost',
-              size: 'icon-xs',
-              disabled: query.isFetching,
-              'aria-label': 'Refresh provider usage',
-              onClick: () => {
-                haptic('tap')
-                void query.refetch()
-              },
-              children: jsx(icons.RefreshCw, { 'aria-hidden': true })
-            })
-          })
-        ]
-      }),
-      switching || (query.isLoading && rows.length === 0)
-        ? jsx('div', { style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center' }, children: jsx(Loader, { type: 'lemniscate-bloom', label: switching ? 'Switching profile' : 'Checking provider accounts', style: { width: 58 } }) })
-        : query.isError && rows.length === 0
-          ? jsxs('div', {
-              style: { padding: 24, display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12 },
-              children: [
-                jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
-                jsx('strong', { children: 'Provider data could not be loaded' }),
-                jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }),
-                jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' })
-              ]
-            })
-          : jsxs('div', {
-              style: { height: 'calc(100% - 58px)', overflowY: 'auto', overflowX: 'hidden' },
-              children: [
-                selected ? jsx(ActiveProvider, { row: selected, model }) : null,
-                jsxs('section', {
-                  'aria-labelledby': 'provider-usage-accounts-heading',
-                  style: { padding: '15px 18px 18px' },
-                  children: [
-                    jsxs('div', {
-                      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingBottom: 6 },
-                      children: [
-                        jsx('h2', { id: 'provider-usage-accounts-heading', style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Other providers' }),
-                        jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: `${available.length} reporting` })
-                      ]
-                    }),
-                    available.length > 0
-                      ? available.map(row => jsx(ProviderDisclosure, { key: row.id, row }))
-                      : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }),
-                    jsx(LimitedProviders, { rows: limited }),
-                    jsx('footer', {
-                      style: { ...textQuaternary, fontSize: 9, lineHeight: 1.45, paddingTop: 14 },
-                      children: 'Credentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.'
-                    })
-                  ]
-                })
-              ]
-            })
-    ]
+    children: [header, body]
   })
 }
 
-export { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, providerScopeKey, providerUsageQueryKey, statusFundingSummary }
+export { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, profileScope, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

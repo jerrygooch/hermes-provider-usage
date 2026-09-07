@@ -20,7 +20,7 @@ const sdkValues = {
   useQuery: () => ({}),
   useValue: () => null
 }
-const reactValues = { useEffect: () => {}, useState: value => [value, () => {}] }
+const reactValues = { useEffect: () => {}, useState: value => [value, () => {}], useRef: () => ({}) }
 const jsxValues = { jsx: component, jsxs: component }
 
 function synthetic(identifier, values) {
@@ -134,11 +134,13 @@ const mergedRows = mergedOpenCode.filter(row => row.id === 'opencode-go' || row.
 if (mergedRows.length !== 1 || mergedRows[0].products.length !== 2) throw new Error('OpenCode product grouping failed')
 if (statusFundingSummary(opencodeGo, 'mimo-v2.5') !== '5h 100% · wk 100%') throw new Error('OpenCode status summary should omit the monthly window')
 if (!compactFundingSummary(opencodeGo, 'mimo-v2.5').includes('mo 85%')) throw new Error('OpenCode detailed summary must retain the monthly window')
-const aliceKey = providerUsageQueryKey('Alice', 'alice-session', 'xai-oauth', 'grok-4.6', 'open')
-const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'chaos-session', 'xai-oauth', 'grok-4.6', 'open')
-const secondBotKey = providerUsageQueryKey('ChaosForge', 'second-bot-session', 'xai-oauth', 'grok-4.6', 'open')
+const aliceKey = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'open')
+const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'open')
+const secondBotKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'open')
 if (providerScopeKey('Alice', 'alice-session') === providerScopeKey('ChaosForge', 'chaos-session')) throw new Error('Focused provider scopes must differ between Alice and ChaosForge')
 if (JSON.stringify(aliceKey) === JSON.stringify(chaosForgeKey)) throw new Error('Profile-scoped usage keys must not share between Alice and ChaosForge')
-if (JSON.stringify(chaosForgeKey) === JSON.stringify(secondBotKey)) throw new Error('Bot/session-scoped usage keys must not share between focused sessions')
+// The /overview request is provider+model only, so a session id must NOT fork
+// the cache — pane and chip now share ONE key for the same profile/provider.
+if (JSON.stringify(chaosForgeKey) !== JSON.stringify(secondBotKey)) throw new Error('Session ids must not split the usage cache; /overview is not session-scoped')
 console.log('profile_scoped_toolbar_query_suite=PASS')
 console.log('resolver_fixture_suite=PASS')
