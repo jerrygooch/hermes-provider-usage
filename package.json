@@ -1,0 +1,21 @@
+{
+  "name": "hermes-provider-usage",
+  "private": true,
+  "version": "0.3.3",
+  "description": "Subscription-aware provider usage and balance plugin for Hermes Desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jerrygooch/hermes-provider-usage.git"
+  },
+  "homepage": "https://github.com/jerrygooch/hermes-provider-usage#readme",
+  "bugs": {
+    "url": "https://github.com/jerrygooch/hermes-provider-usage/issues"
+  },
+  "scripts": {
+    "check": "node --check desktop/plugin.js && node --experimental-vm-modules tests/provider_usage_logic_test.mjs && python -m py_compile dashboard/plugin_api.py",
+    "test": "node --experimental-vm-modules tests/provider_usage_logic_test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

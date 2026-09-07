@@ -1,0 +1,5 @@
+.provider-usage-dashboard-note {
+  color: var(--muted-foreground, #a3a3a3);
+  font: 13px/1.45 system-ui, sans-serif;
+  padding: 16px;
+}
