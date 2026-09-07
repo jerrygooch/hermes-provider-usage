@@ -134,10 +134,10 @@ const mergedRows = mergedOpenCode.filter(row => row.id === 'opencode-go' || row.
 if (mergedRows.length !== 1 || mergedRows[0].products.length !== 2) throw new Error('OpenCode product grouping failed')
 if (statusFundingSummary(opencodeGo, 'mimo-v2.5') !== '5h 100% · wk 100%') throw new Error('OpenCode status summary should omit the monthly window')
 if (!compactFundingSummary(opencodeGo, 'mimo-v2.5').includes('mo 85%')) throw new Error('OpenCode detailed summary must retain the monthly window')
-const aliceKey = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'open')
-const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'open')
-const secondBotKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'open')
-if (providerScopeKey('Alice', 'alice-session') === providerScopeKey('ChaosForge', 'chaos-session')) throw new Error('Focused provider scopes must differ between Alice and ChaosForge')
+const aliceKey = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'local::Alice')
+const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'local::ChaosForge')
+const secondBotKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'local::ChaosForge')
+if (providerScopeKey('local::Alice', 'alice-session') === providerScopeKey('local::ChaosForge', 'chaos-session')) throw new Error('Focused provider scopes must differ between Alice and ChaosForge')
 if (JSON.stringify(aliceKey) === JSON.stringify(chaosForgeKey)) throw new Error('Profile-scoped usage keys must not share between Alice and ChaosForge')
 // The /overview request is provider+model only, so a session id must NOT fork
 // the cache — pane and chip now share ONE key for the same profile/provider.

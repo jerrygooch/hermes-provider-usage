@@ -41,43 +41,84 @@ function normaliseProvider(value) {
   return text
 }
 
-function rememberProvider(profile, provider) {
+// Connection-qualified source identity for the account ctx.rest actually talks
+// to. Two sockets can share a PROFILE name on different connections (a remote
+// alias vs. the live socket) — a same-profile remote collides on name, so any
+// scope keyed or memoised purely by profile can serve one account's data under
+// another's focus. Source-qualify everything that reads an account.
+function activeSourceId(connectionId, profile) {
+  const connection = String(connectionId || '').trim()
+  const scoped = profileScope(profile)
+  return connection ? `${connection}::${scoped}` : scoped
+}
+
+function rememberProvider(scopedKey, provider) {
   const resolved = normaliseProvider(provider)
-  if (resolved) lastFocusedProviders.set(profileScope(profile), resolved)
+  if (resolved) lastFocusedProviders.set(scopedKey, resolved)
   return resolved
 }
 
-function rememberedProvider(profile) {
-  return lastFocusedProviders.get(profileScope(profile)) || ''
+function rememberedProvider(scopedKey) {
+  return lastFocusedProviders.get(scopedKey) || ''
 }
 
-function providerScopeKey(profile, sessionId) {
-  return `${profileScope(profile)}::${String(sessionId || '__workspace__')}`
+function providerScopeKey(sourceId, sessionId) {
+  return `${sourceId}::${String(sessionId || '__workspace__')}`
 }
 
 // The plugin's REST door (ctx.rest) routes on the ACTIVE socket connection and
 // profile — it cannot be pinned to the FOCUSED chat's profile. So the fetched
-// and cached scope is always the ACTIVE profile. A focused session that lives in
-// another profile (a bot tile / multi-profile focus without a socket swap) is a
-// labeling concern (diverged), never a reason to key the cache under a profile
-// ctx.rest cannot reach.
-function resolveUsageScope({ focusedOwner, focusedProfile, activeProfile }) {
-  const alias = String(focusedProfile || '').trim()
-  const focus = focusedOwner && typeof focusedOwner.profile === 'string' && focusedOwner.profile.trim()
-    ? focusedOwner.profile.trim()
-    : alias
+// and cached scope is always the ACTIVE account, identified by its
+// connection-qualified source (host.state.connectionId + host.state.profile).
+// A focused session is only safe to interpret when its owner (connection +
+// profile) matches that active source; otherwise it is a DIVERGENCE and must
+// fail closed (gate, no fetch/probe), never guessed — a same-profile remote
+// would otherwise show one account's data under another's focus.
+function resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile }) {
   const active = String(activeProfile || '').trim() || 'default'
-  return { fetchProfile: active, focusProfile: focus || active, diverged: Boolean(focus) && focus !== active }
+  const activeSource = activeSourceId(activeConnectionId, active)
+  const ownerConnection = String(activeConnectionId || '').trim()
+  // Preferred: the SDK's connection-qualified focus owner.
+  if (focusedOwner && typeof focusedOwner?.profile === 'string') {
+    const focus = String(focusedOwner.profile).trim() || active
+    const focusSource = activeSourceId(focusedOwner?.connectionId, focus)
+    const verified = Boolean(activeSource) && focusSource === activeSource
+    return {
+      fetchProfile: active,
+      focusProfile: focus,
+      diverged: !verified,
+      source: verified ? 'active' : 'foreign',
+      sourceId: activeSource,
+      ownerConnection
+    }
+  }
+  // Compatibility ladder (desktop builds without the focused-owner atom): no
+  // cross-connection focus exists there, so profile parity is the honest check.
+  const alias = String(focusedProfile || '').trim()
+  const focus = alias || active
+  const diverged = Boolean(alias) && alias !== active
+  return {
+    fetchProfile: active,
+    focusProfile: focus,
+    diverged,
+    source: diverged ? 'foreign-profile' : 'active',
+    sourceId: activeSource,
+    ownerConnection
+  }
 }
 
-function providerUsageQueryKey(fetchProfile, provider, model, gateway) {
+// The key must NEVER include the gateway state: a reconnecting socket on the
+// same account would otherwise change the key and lose the already-cached rows,
+// making the "reconnecting keeps the last data" claim false. The stable source
+// (connection+profile) is what identifies the account, and it survives reconnects.
+function providerUsageQueryKey(fetchProfile, provider, model, source) {
   return [
     'provider-usage',
     'overview',
     profileScope(fetchProfile),
     provider || '',
     model || '',
-    gateway || ''
+    source || profileScope(fetchProfile)
   ]
 }
 
@@ -103,36 +144,79 @@ function payloadFromResponse(response) {
   return response?.payload || response?.result?.payload || response?.result || response?.data || response || {}
 }
 
-function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
-  const scope = providerScopeKey(ownerProfile, sessionId)
+// ctx.rest 404s when the plugin's Python backend namespace isn't enabled or
+// installed in the ACTIVE profile. Surface that explicitly and NEVER try to
+// auto-enable/install it — no edits to real profiles.
+function isBackendNotEnabled(error) {
+  if (!error) return false
+  if (typeof error === 'object') {
+    const status = error?.status ?? error?.status_code ?? error?.code ?? error?.response?.status ?? error?.payload?.status_code
+    if (status === 404) return true
+    const text = [error?.message, error?.detail, error?.error, error?.reason, error?.response?.data]
+      .filter(value => typeof value === 'string')
+      .join(' ')
+    if (/not (enabled|installed|mounted)|namespace[^"]*?not (found|enabled|installed)|no plugin backend/i.test(text)) return true
+  }
+  return /not (enabled|installed|mounted)|namespace.*404/i.test(String(error?.message ?? error ?? ''))
+}
+
+// Extract a provider id from a session payload (`provider` field, or the
+// `Model: ... (provider)` status line). Returns '' when none is attributable.
+function providerFromPayload(payload) {
+  const statusMatch = typeof payload?.output === 'string'
+    ? payload.output.match(/^Model:\s+.*\(([^()]*)\)\s*$/m)
+    : null
+  const value = payload?.provider || payload?.info?.provider || statusMatch?.[1]
+  return typeof value === 'string' && value.trim() ? normaliseProvider(value) : ''
+}
+
+// A session.info event is only OURS when it names our focused session AND, if
+// it carries source attribution, that source matches the scope we are mounted
+// for. Anonymous events (missing ids) are never accepted — a late cross-profile
+// callback must not contaminate remembered provider state.
+function eventOwns(event, sessionId, ownerSource, ownerProfile) {
+  const payload = event?.payload || event || {}
+  const eventSession = event?.session_id || payload?.session_id
+  const evSource = String(event?.connection_id || event?.connectionId || payload?.connection_id || payload?.connectionId || '').trim()
+  const evProfile = String(event?.profile || payload?.profile || '').trim()
+  const ownerConflict = Boolean(evSource || evProfile) &&
+    (evSource !== String(ownerSource || '').trim() || evProfile !== String(ownerProfile || '').trim())
+  if (sessionId) {
+    if (eventSession && eventSession !== sessionId) return false
+    if (!eventSession) return false // unidentifiable event -> fail closed
+    return !ownerConflict
+  }
+  // No focused session id: require explicit source attribution that matches us.
+  return Boolean(evSource) && Boolean(evProfile) && !ownerConflict
+}
+
+function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '', ownerSource = '', ownerScopedKey = '') {
+  const scope = providerScopeKey(ownerScopedKey || ownerSource || profileScope(ownerProfile), sessionId)
   const [state, setState] = useState(() => ({
     scope,
-    provider: rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
+    provider: rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider)
   }))
 
   useEffect(() => {
     let alive = true
-    // Prefer the OWNING profile's remembered provider. `initialProvider` is only
-    // an open-time hint — it must never override a real per-profile memory or
-    // leak across a profile switch into a scope it never belonged to.
-    const seed = rememberedProvider(ownerProfile) || normaliseProvider(initialProvider)
+    // Seed from the OWNING account's remembered provider; `initialProvider` is
+    // only an open-time hint and must never override real per-source memory.
+    const seed = rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider)
     setState({ scope, provider: seed })
+
     const accept = payload => {
-      const statusMatch = typeof payload?.output === 'string'
-        ? payload.output.match(/^Model:\s+.*\(([^()]*)\)\s*$/m)
-        : null
-      const value = payload?.provider || payload?.info?.provider || statusMatch?.[1]
-      if (typeof value === 'string' && value.trim() && alive) {
-        const resolved = rememberProvider(ownerProfile, value)
+      const value = providerFromPayload(payload)
+      if (value && alive) {
+        const resolved = rememberProvider(ownerScopedKey, value)
         if (resolved) setState({ scope, provider: resolved })
       }
     }
 
     const dispose = host.onEvent('session.info', event => {
-      const payload = event?.payload || {}
-      const eventSession = event?.session_id || payload?.session_id
-      if (sessionId && eventSession && eventSession !== sessionId) return
-      accept(payload)
+      // Exact identity + current ownership: a late event for a foreign session,
+      // or an anonymous event, must not contaminate this account's memory.
+      if (!eventOwns(event, sessionId, ownerSource, ownerProfile)) return
+      accept(event?.payload || {})
     })
 
     if (sessionId) {
@@ -149,14 +233,14 @@ function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '') {
       alive = false
       dispose()
     }
-  }, [sessionId, ownerProfile, initialProvider, scope])
+  }, [sessionId, ownerProfile, ownerSource, ownerScopedKey, scope, initialProvider])
 
   return state.scope === scope ? state.provider : ''
 }
 
-function useOverview(ctx, provider, model, fetchProfile, gateway) {
+function useOverview(ctx, provider, model, fetchProfile, gateway, source) {
   return useQuery({
-    queryKey: providerUsageQueryKey(fetchProfile, provider, model, gateway),
+    queryKey: providerUsageQueryKey(fetchProfile, provider, model, source),
     queryFn: () =>
       ctx.rest('/overview', {
         method: 'POST',
@@ -381,28 +465,28 @@ function compactFundingSummary(row, model) {
 function statusFundingSummary(row, model) {
   const state = fundingState(row, model)
   if (row?.id === 'opencode-go' && state.kind === 'subscription') {
-    const { windows } = state
-    // Compact to the revenue-relevant 5-hour + weekly meters, but never HIDE an
-    // exhausted window: an exhausted Monthly still blocks requests, so it must
-    // stay visible even though a healthy monthly is compressed away.
-    const primary = windows.filter(window => {
+    // Keep the revenue-relevant 5-hour + weekly meters, compress a healthy
+    // monthly away, but NEVER hide a blocking/exhausted window. Order the
+    // blocking (exhausted) meters FIRST so the chip's trailing truncation cuts
+    // a healthy meter, never the one blocking requests. The pane keeps the full
+    // set via AllProviderMetrics regardless.
+    const shown = state.windows.filter(window => {
+      const remaining = round(window?.remaining_percent)
+      if (remaining == null) return false
       const label = shortWindowLabel(window)
-      return label === '5h' || label === 'wk'
+      if (label === 'mo' && remaining > 0) return false // healthy monthly compresses away
+      return label === '5h' || label === 'wk' || remaining <= 0 // 5h/wk + any blocker
     })
-    if (primary.length > 0) {
-      const primaryPart = primary.map(window => `${shortWindowLabel(window)} ${round(window.remaining_percent)}%`)
-      const exhaustedOthers = windows.filter(window => {
-        const label = shortWindowLabel(window)
-        return label !== '5h' && label !== 'wk' && round(window?.remaining_percent) != null && round(window.remaining_percent) <= 0
-      })
-      const extra = exhaustedOthers.map(window => `${shortWindowLabel(window)} 0%`)
-      return [...primaryPart, ...extra].join(' · ')
+    if (shown.length > 0) {
+      const blocked = window => (round(window?.remaining_percent) ?? 0) <= 0
+      const ordered = [...shown.filter(blocked), ...shown.filter(window => !blocked(window))]
+      return ordered.map(window => `${shortWindowLabel(window)} ${round(window.remaining_percent)}%`).join(' · ')
     }
   }
   return compactFundingSummary(row, model)
 }
 
-function chipDescription(row, model, data, switching, ready, scope) {
+function chipDescription(row, model, data, switching, ready, refetchError, scope) {
   if (switching) return `Switching profile — ${scope.fetchProfile} usage will refresh when the new profile is ready.`
   const updated = data?.fetched_at ? new Date(data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet'
   const stateNote = scope?.diverged
@@ -412,6 +496,11 @@ function chipDescription(row, model, data, switching, ready, scope) {
     return row
       ? `Provider usage for ${scope.fetchProfile} is from ${updated}; reconnecting.${stateNote}`
       : `Provider usage for ${scope.fetchProfile}. Reconnecting.${stateNote}`
+  }
+  if (refetchError) {
+    return row
+      ? `Provider usage for ${scope.fetchProfile} could not be refreshed — showing ${updated}.${stateNote}`
+      : `Provider usage for ${scope.fetchProfile}. Could not refresh.${stateNote}`
   }
   if (!row) return `Provider usage for ${scope.fetchProfile}. Last updated ${updated}.${stateNote}`
   const modelName = model ? ` Active model ${model}.` : ''
@@ -920,10 +1009,11 @@ function LimitedProviders({ rows }) {
   })
 }
 
-function openOverview(ctx, fetchProfile, initialProvider) {
-  // Scope the open-time provider hint to the profile the pane will actually
-  // query (the active socket's), so it never leaks across a later switch.
-  if (initialProvider) rememberProvider(fetchProfile, initialProvider)
+function openOverview(ctx, fetchProfile, initialProvider, sourceId) {
+  // Scope the open-time provider hint to the source the pane will actually
+  // query (the active account), so it never leaks across a switch.
+  const memoKey = sourceId || profileScope(fetchProfile)
+  if (initialProvider) rememberProvider(memoKey, initialProvider)
   if (typeof host.openWorkspace === 'function') {
     host.openWorkspace('provider-usage-overview', {
       title: 'Provider usage',
@@ -939,25 +1029,55 @@ function ActiveUsageChip({ ctx }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
   const activeProfile = useValue(host.state.profile)
+  const activeConnectionId = host.state.connectionId ? useValue(host.state.connectionId) : ''
   const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
   const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
+  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile })
+
+  // Divergence fails closed: never fetch or probe for a foreign account.
+  if (scope.diverged) {
+    return jsx(GatedUsageChip, { focusProfile: scope.focusProfile })
+  }
+  return jsx(ActiveUsageChipBody, { ctx, model, sessionId, gateway, scope })
+}
+
+function GatedUsageChip({ focusProfile }) {
+  const description = `The focused chat is in ${focusProfile}. Switch the active profile to ${focusProfile} to view its provider usage.`
+  return jsx(Tip, {
+    label: description,
+    children: jsx(Button, {
+      type: 'button',
+      variant: 'ghost',
+      size: 'micro',
+      'aria-label': description,
+      onClick: () => {
+        haptic('tap')
+        host.notify({ kind: 'info', message: `Provider usage follows the active profile. Switch to ${focusProfile} to see its usage.` })
+      },
+      style: { maxWidth: 230 },
+      children: [jsx(icons.Activity, { 'aria-hidden': true }), jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Usage on ${focusProfile}` })]
+    })
+  })
+}
+
+function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   const ready = gatewayReady(gateway)
-  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeProfile })
-  const provider = useActiveProvider(sessionId, '', scope.fetchProfile)
-  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway)
+  const provider = useActiveProvider(sessionId, '', scope.fetchProfile, scope.ownerConnection, scope.sourceId)
+  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway, scope.sourceId)
   const row = activeRow(query.data, provider)
   const state = fundingState(row, model)
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
+  const refetchError = Boolean(query.isError) && Boolean(row)
   const label = row ? compactProviderLabel(row) : 'Usage'
 
   let summary = 'unavailable'
   if (switching) summary = 'switching'
   else if (row) summary = statusFundingSummary(row, model)
   else if (ready) summary = query.isLoading ? 'checking' : 'unavailable'
+  if (refetchError) summary = `${summary} · not refreshed`
 
-  const scopeLabel = scope.diverged ? `· ${scope.fetchProfile}` : ''
-  const description = chipDescription(row, model, query.data, switching, ready, scope)
+  const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
 
   return jsx(Tip, {
@@ -969,12 +1089,12 @@ function ActiveUsageChip({ ctx }) {
       'aria-label': description,
       onClick: () => {
         haptic('tap')
-        openOverview(ctx, scope.fetchProfile, provider || row?.id)
+        openOverview(ctx, scope.fetchProfile, provider || row?.id, scope.sourceId)
       },
       style: { maxWidth: 230, fontVariantNumeric: 'tabular-nums' },
       children: [
         jsx(Icon, { 'aria-hidden': true }),
-        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label}${scopeLabel} · ${summary}` })
+        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` })
       ]
     })
   })
@@ -984,14 +1104,47 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
   const activeProfile = useValue(host.state.profile)
+  const activeConnectionId = host.state.connectionId ? useValue(host.state.connectionId) : ''
   const focusedOwner = host.state.focusedSessionOwner ? useValue(host.state.focusedSessionOwner) : null
   const focusedProfile = host.state.focusedSessionProfile ? useValue(host.state.focusedSessionProfile) : ''
   const gateway = useValue(host.state.gateway)
+  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeConnectionId, activeProfile })
+
+  // Divergence fails closed: the focused chat is owned by another source than
+  // the active socket ctx.rest can reach, so we neither fetch nor probe — we
+  // gate and tell the user to switch.
+  if (scope.diverged) {
+    return jsx(GatedUsagePane, { scope })
+  }
+  return jsx(ProviderUsagePaneBody, { ctx, initialProvider, model, sessionId, gateway, scope })
+}
+
+function GatedUsagePane({ scope }) {
+  const header = jsxs('header', {
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 18px', borderBottom: HAIRLINE },
+    children: [
+      jsxs('div', { style: { minWidth: 0, display: 'grid', gap: 2 }, children: [
+        jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }),
+        jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Scope ${scope.fetchProfile} · focused ${scope.focusProfile}` })
+      ] })
+    ]
+  })
+  const body = jsxs('div', {
+    style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12, padding: 24 },
+    children: [
+      jsx(StatusDot, { tone: 'warn', style: { width: 12, height: 12 } }),
+      jsx('strong', { style: { ...textSecondary, fontSize: 13, fontWeight: 600 }, children: `The focused chat is in ${scope.focusProfile}` }),
+      jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, maxWidth: 340 }, children: `Provider usage follows the active profile's socket. Switch to ${scope.focusProfile} to view its provider usage here.` })
+    ]
+  })
+  return jsxs('div', { style: { height: '100%', minWidth: 0, overflow: 'hidden', color: 'var(--ui-text-primary)', fontSize: 12 }, children: [header, body] })
+}
+
+function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway, scope }) {
   const ready = gatewayReady(gateway)
-  const scope = resolveUsageScope({ focusedOwner, focusedProfile, activeProfile })
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
-  const provider = useActiveProvider(sessionId, initialProvider, scope.fetchProfile)
-  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway)
+  const provider = useActiveProvider(sessionId, initialProvider, scope.fetchProfile, scope.ownerConnection, scope.sourceId)
+  const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway, scope.sourceId)
   const rawRows = Array.isArray(query.data?.providers) ? query.data.providers : []
   const rows = mergeOpenCodeRows(rawRows, provider)
   const selected = activeRow({ ...query.data, providers: rows }, provider)
@@ -999,10 +1152,11 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   const available = rows.filter(row => row.available && row.id !== activeId)
   const limited = rows.filter(row => !row.available && row.id !== activeId)
   const hasRows = rows.length > 0
+  const refetchError = Boolean(query.isError) && hasRows
+  const backendNotEnabled = ready && Boolean(query.isError) && !hasRows && isBackendNotEnabled(query.error)
 
   const scopeSubtitle = [
     `Scope ${scope.fetchProfile}`,
-    scope.diverged ? `focused ${scope.focusProfile}` : null,
     hasRows ? formatUpdated(query.data?.fetched_at) : null
   ].filter(Boolean).join(' · ')
 
@@ -1036,9 +1190,9 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
     ]
   })
 
-  // Honest recovery states — a real profile swap loads; a mere reconnect keeps
-  // the last data visible (stale) instead of wiping to a full-screen loader.
-  const reconnectBanner = switching || !ready
+  // Honest recovery states — a real profile swap loads; a reconnect OR a failed
+  // refresh keeps the last data visible (stale) instead of wiping it away.
+  const staleBanner = switching || !ready || refetchError
     ? jsx('div', {
         style: { display: 'flex', alignItems: 'center', gap: 9, padding: '8px 18px', borderBottom: HAIRLINE, background: 'var(--ui-bg-tertiary)' },
         children: [
@@ -1047,19 +1201,9 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
             style: { ...textSecondary, fontSize: 11, lineHeight: 1.4 },
             children: switching
               ? `Switching profile — refreshing ${scope.fetchProfile} usage when the new profile is ready.`
-              : `Reconnecting — showing ${scope.fetchProfile} usage from ${hasRows ? formatUpdated(query.data?.fetched_at) : 'earlier'}.`
-          })
-        ]
-      })
-    : null
-
-  const divergenceNote = scope.diverged
-    ? jsx('div', {
-        style: { display: 'flex', alignItems: 'center', gap: 9, padding: '8px 18px', borderBottom: HAIRLINE, background: 'var(--ui-bg-tertiary)' },
-        children: [
-          jsx('span', {
-            style: { ...textTertiary, fontSize: 10, lineHeight: 1.4 },
-            children: `The focused chat is in ${scope.focusProfile}. Provider Usage shows the active ${scope.fetchProfile} profile's usage, which ctx.rest can reach; it is not fetched from ${scope.focusProfile} until that profile is the active socket.`
+              : refetchError
+                ? `Could not refresh — showing ${scope.fetchProfile} usage from ${formatUpdated(query.data?.fetched_at) || 'earlier'}.`
+                : `Reconnecting — showing ${scope.fetchProfile} usage from ${hasRows ? formatUpdated(query.data?.fetched_at) : 'earlier'}.`
           })
         ]
       })
@@ -1082,19 +1226,24 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   } else if (!switching && ready && query.isError && !hasRows) {
     body = jsxs('div', {
       style: { padding: 24, display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12 },
-      children: [
-        jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
-        jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }),
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }),
-        jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' })
-      ]
+      children: backendNotEnabled
+        ? [
+            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
+            jsx('strong', { children: `Provider usage isn't enabled or installed in ${scope.fetchProfile}` }),
+            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in the profile to see provider usage here. Hermes never edits profiles automatically.' })
+          ]
+        : [
+            jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }),
+            jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }),
+            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }),
+            jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' })
+          ]
     })
   } else {
     body = jsxs('div', {
       style: { height: 'calc(100% - 58px)', overflowY: 'auto', overflowX: 'hidden' },
       children: [
-        reconnectBanner,
-        divergenceNote,
+        staleBanner,
         selected ? jsx(ActiveProvider, { row: selected, model }) : null,
         jsxs('section', {
           'aria-labelledby': 'provider-usage-accounts-heading',
@@ -1127,7 +1276,7 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   })
 }
 
-export { compactFundingSummary, fundingState, governingWindows, mergeOpenCodeRows, profileScope, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

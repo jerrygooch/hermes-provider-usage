@@ -12,10 +12,15 @@
     "url": "https://github.com/jerrygooch/hermes-provider-usage/issues"
   },
   "scripts": {
-    "check": "node --check desktop/plugin.js && node --experimental-vm-modules tests/provider_usage_logic_test.mjs && node --experimental-vm-modules tests/provider_scope_behavior_test.mjs && node --experimental-vm-modules tests/provider_render_test.mjs && python -m py_compile dashboard/plugin_api.py",
-    "test": "node --experimental-vm-modules tests/provider_usage_logic_test.mjs && node --experimental-vm-modules tests/provider_scope_behavior_test.mjs && node --experimental-vm-modules tests/provider_render_test.mjs"
+    "check": "node --check desktop/plugin.js && node --experimental-vm-modules tests/provider_usage_logic_test.mjs && node --experimental-vm-modules tests/provider_scope_behavior_test.mjs && node --experimental-vm-modules tests/provider_render_test.mjs && node --experimental-vm-modules tests/plugin_lifecycle_test.mjs && python -m py_compile dashboard/plugin_api.py",
+    "test": "node --experimental-vm-modules tests/provider_usage_logic_test.mjs && node --experimental-vm-modules tests/provider_scope_behavior_test.mjs && node --experimental-vm-modules tests/provider_render_test.mjs && node --experimental-vm-modules tests/plugin_lifecycle_test.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   }
 }

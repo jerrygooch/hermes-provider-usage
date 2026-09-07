@@ -1,36 +1,30 @@
 /**
- * Real renderer smoke test: mounts the plugin's actual registered components
- * (status chip + pane) with React's server renderer and asserts the honest
- * profile-scope / reconnect / divergence UI states appear. This exercises the
- * real JSX produced by the plugin's hooks — any render-time ReferenceError,
- * bad icon reference, invalid StatusDot tone, or wrong prop surfaces here —
- * rather than regex-matching source text.
+ * Static SSR smoke test: renders the plugin's registered components (status
+ * chip + pane) with the real React server renderer and asserts the honest
+ * profile-scope / reconnect / divergence / missing-backend UI states appear.
+ * This exercises the actual JSX produced by the plugin's hooks — any render-time
+ * ReferenceError, bad icon reference, invalid StatusDot tone, or wrong prop
+ * surfaces here — plus the fail-closed divergence gate.
  *
- * Uses the repo's real `react` + `react-dom/server` (resolved from the Hermes
- * agent's node_modules, not re-implemented) with the SDK primitives stubbed so
- * the components render under controlled atoms and query data.
+ * React + react-dom resolve from the REPOSITORY's own devDependencies (this
+ * repo, not any private Hermes path). Effects do NOT run under SSR, so the
+ * async lifecycle (A-B-A races, reconnect retention, event attribution) is
+ * covered separately by the mounted DOM harness in plugin_lifecycle_test.mjs.
  */
-import fs from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
-import { pathToFileURL } from 'node:url'
-import { fileURLToPath } from 'node:url'
 
-const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || 'C:/Users/jerry/AppData/Local/hermes/hermes-agent'
-const reactEntry = path.join(HERMES_AGENT_ROOT, 'node_modules/react/index.js')
-if (!fs.existsSync(reactEntry)) {
-  throw new Error(`Renderer test needs the Hermes agent's node_modules for real React. Set HERMES_AGENT_ROOT to the hermes-agent repo (missing: ${reactEntry})`)
-}
+import fs from 'node:fs'
+import vm from 'node:vm'
+import { fileURLToPath } from 'node:url'
 
 const pluginPath = fileURLToPath(new URL('../desktop/plugin.js', import.meta.url))
 const source = fs.readFileSync(pluginPath, 'utf8')
 const context = vm.createContext({ console })
 
-// Real React + server renderer from the Hermes agent's node_modules.
-const React = await import(pathToFileURL(path.join(HERMES_AGENT_ROOT, 'node_modules/react/index.js')).href)
-const reactDefault = React.default ?? React
-const { renderToStaticMarkup } = await import(pathToFileURL(path.join(HERMES_AGENT_ROOT, 'node_modules/react-dom/server.js')).href)
-const JsxRuntime = await import(pathToFileURL(path.join(HERMES_AGENT_ROOT, 'node_modules/react/jsx-runtime.js')).href)
+// Real React + server renderer from THIS repo's declared devDependencies.
+const React = (await import('react')).default
+const reactHooks = { useEffect: React.useEffect, useState: React.useState, useRef: React.useRef }
+const { renderToStaticMarkup } = await import('react-dom/server')
+const JsxRuntime = await import('react/jsx-runtime')
 const jsxRuntime = JsxRuntime.default ?? JsxRuntime
 
 // ── Controllable plugin environment ──────────────────────────────────────────
@@ -39,18 +33,20 @@ const world = {
   sessionId: 'sess-1',
   storedSessionId: 'sess-1',
   profile: 'default',
+  connectionId: 'local',
   focusedOwner: null, // null = atom absent (legacy desktop)
   focusedProfile: '',
   gateway: 'open'
 }
 const mkAtom = key => ({ get: () => world[key] })
-let queryResult = { data: null, isLoading: false, isError: false, isFetching: false, refetch: () => {} }
+let queryResult = { data: null, isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 let restCalls = []
 const sdkHost = {
   state: {
     model: mkAtom('model'),
     focusedSessionId: mkAtom('sessionId'),
     profile: mkAtom('profile'),
+    connectionId: mkAtom('connectionId'),
     gateway: mkAtom('gateway'),
     focusedStoredSessionId: mkAtom('storedSessionId'),
     // Feature-detected: absent when no focused owner is published.
@@ -68,19 +64,13 @@ const sdkHost = {
 }
 
 const Base = ({ children, title, label, tone, ...rest }) =>
-  reactDefault.createElement('span', { 'data-slot': 'aui-slot', 'data-tone': tone, title, ...rest }, children)
+  React.createElement('span', { 'data-slot': 'aui-slot', 'data-tone': tone, title, ...rest }, children)
 const sdkComponents = { Badge: Base, Button: Base, Loader: Base, RowButton: Base, StatusDot: Base, Tip: Base }
 
 function synthetic(identifier, values) {
   return new vm.SyntheticModule(Object.keys(values), function () {
     for (const [key, value] of Object.entries(values)) this.setExport(key, value)
   }, { context, identifier })
-}
-
-const reactHooks = {
-  useEffect: reactDefault.useEffect,
-  useState: reactDefault.useState,
-  useRef: reactDefault.useRef
 }
 
 const sdkValues = {
@@ -123,8 +113,8 @@ plugin.register(capturedCtx)
 const chipContribution = contributions.find(c => c.area === 'statusBar.right')
 const paneContribution = contributions.find(c => c.area === 'panes')
 if (!chipContribution || !paneContribution) throw new Error('chips/pane not registered')
-const renderChip = () => renderToStaticMarkup(reactDefault.createElement(chipContribution.render))
-const renderPane = () => renderToStaticMarkup(reactDefault.createElement(paneContribution.render))
+const renderChip = () => renderToStaticMarkup(React.createElement(chipContribution.render))
+const renderPane = () => renderToStaticMarkup(React.createElement(paneContribution.render))
 
 const fixture = fetchedAt => ({
   version: 1,
@@ -155,12 +145,13 @@ function nocheck(name, html, forbiddenNeedle) {
   }
 }
 
-// Loaded normal scope: default profile, focused session also default.
+// Loaded normal scope: default profile, focused session also default (legacy).
 world.profile = 'default'
+world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'open'
-queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, refetch: () => {} }
+queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
 const chipLoaded = renderChip()
 check('chip renders the provider funding summary', chipLoaded, '· 62% left')
@@ -170,25 +161,40 @@ const paneLoaded = renderPane()
 check('pane header shows the active scope', paneLoaded, 'Scope default')
 check('pane shows the loaded provider usage', paneLoaded, 'Account limits &amp; credits')
 
-// Diverged focus: the focused chat is Alice while the active socket is default.
+// Verified active focus (connection-qualified owner == active source).
 world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = { connectionId: 'local', profile: 'default' }
+world.focusedProfile = 'default'
+world.gateway = 'open'
+queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
+const chipVerified = renderChip()
+check('verified focus renders normal usage (not a gate)', chipVerified, '62% left')
+
+// Diverged focus: the focused chat is Alice but the active socket is default.
+// #2 must FAIL CLOSED into a gate — no fetching/probe of a foreign account.
+world.profile = 'default'
+world.connectionId = 'local'
 world.focusedOwner = { connectionId: 'local', profile: 'Alice' }
 world.focusedProfile = 'Alice'
 world.gateway = 'open'
-
 const chipDiverged = renderChip()
-check('diverged chip shows the fetched scope label', chipDiverged, '· default')
-check('diverged chip tooltip names the focused chat profile', chipDiverged, 'focused chat is in Alice')
+check('#2 diverged chip shows a gate keyed to the focus profile', chipDiverged, 'Usage on Alice')
+check('#2 diverged chip tooltip tells the user to switch', chipDiverged, 'Switch the active profile to Alice')
+nocheck('#2 diverged chip does NOT show active accounting under foreign focus', chipDiverged, '62% left')
 
 const paneDiverged = renderPane()
-check('diverged pane names the active vs focused scope', paneDiverged, 'The focused chat is in Alice')
-check('diverged pane keeps the active-profile subtitle', paneDiverged, 'focused Alice')
+check('#2 diverged pane names the focus profile', paneDiverged, 'The focused chat is in Alice')
+check('#2 diverged pane tells the user to switch', paneDiverged, 'Switch to Alice to view its provider usage here')
+nocheck('#2 diverged pane does NOT display active-account rows', paneDiverged, 'Account limits &amp; credits')
 
 // Reconnect (same profile, socket NOT ready): last rows stay visible as stale.
 world.profile = 'default'
+world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'closed'
+queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
 const chipReconnecting = renderChip()
 check('reconnecting chip keeps the last figure, not "switching"', chipReconnecting, '62% left')
@@ -199,15 +205,36 @@ check('reconnecting pane keeps the loaded rows', paneReconnecting, 'Account limi
 check('reconnecting pane surfaces an honest stale banner', paneReconnecting, 'Reconnecting — showing default usage')
 nocheck('reconnecting pane does NOT claim a profile switch', paneReconnecting, 'Switching profile — refreshing')
 
-// No rows yet + socket not ready: honest empty reconnect state, no spinner+no switch.
+// No rows yet + socket not ready: honest empty reconnect state.
 world.profile = 'default'
+world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'closed'
-queryResult = { data: null, isLoading: false, isError: false, isFetching: false, refetch: () => {} }
+queryResult = { data: null, isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
 const paneEmptyReconnect = renderPane()
 check('reconnecting with no rows shows the reconnect note', paneEmptyReconnect, 'Provider usage for default will load when the connection is ready')
+
+// Refetch failure with rows: stale indication must surface in panel.
+world.gateway = 'open'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: true, isFetching: false, error: new Error('boom'), refetch: () => {} }
+const paneStaleRefresh = renderPane()
+check('#5 refetch-error with rows keeps the rows', paneStaleRefresh, 'Account limits &amp; credits')
+check('#5 refetch-error with rows surfaces a stale banner', paneStaleRefresh, 'Could not refresh — showing default usage')
+
+// Missing backend namespace (404): explicit "not enabled/installed", no auto-edit.
+world.gateway = 'open'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+queryResult = { data: null, isLoading: false, isError: true, isFetching: false, error: { status: 404, message: 'plugin namespace not enabled' }, refetch: () => {} }
+const paneMissingBackend = renderPane()
+check('#7 missing backend surfaces explicit not-enabled copy', paneMissingBackend, 'enabled or installed in default')
+check('#7 missing backend says Hermes never edits profiles', paneMissingBackend, 'Hermes never edits profiles automatically')
 
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)

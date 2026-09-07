@@ -44,8 +44,9 @@ await mod.link(specifier => {
 await mod.evaluate()
 
 const {
-  providerUsageQueryKey,
+  activeSourceId,
   providerScopeKey,
+  providerUsageQueryKey,
   rememberProvider,
   rememberedProvider,
   resolveUsageScope,
@@ -64,43 +65,68 @@ function check(name, condition) {
   }
 }
 
-// ── Scope resolution: ctx.rest physically targets the ACTIVE socket profile ──
-// A focused session can belong to a different profile than the live socket
-// (bot tile / multi-profile focus without a socket swap). The plugin's REST is
-// routed by the active connection, so the fetched/keyed profile must be the
-// ACTIVE profile; a differing focused profile is a labeling concern, never a
-// reason to key the cache under a profile ctx.rest cannot reach.
+// ── Scope resolution: ctx.rest physically targets the ACTIVE socket source ──
+// The account ctx.rest queries is identified by connection+profile, not profile
+// alone. A focused session is interpretable ONLY when its connection-qualified
+// owner matches that active source; anything else fails closed (diverged) and
+// the pane/chip gate instead of fetching or probing a foreign account.
 
-// Normal single-socket / genuine profile-switch case: focus == active.
+// Normal single-socket genuine profile-switch case: focus owner == active source.
 const plain = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
   focusedProfile: 'Alice',
+  activeConnectionId: 'local',
   activeProfile: 'Alice'
 })
 check('focus==active: fetch profile is the active profile', plain.fetchProfile === 'Alice')
 check('focus==active: not diverged', plain.diverged === false)
-check('focus==active: focusProfile equals active', plain.focusProfile === 'Alice')
+check('focus==active: focusProfile preserved', plain.focusProfile === 'Alice')
+check('focus==active: source is active', plain.source === 'active')
+check('focus==active: sourceId is connection-qualified', activeSourceId('local', 'Alice') === plain.sourceId)
 
-// Legacy desktop: only focusedSessionProfile (a half-shape) present, == active.
-const legacy = resolveUsageScope({ focusedOwner: null, focusedProfile: 'default', activeProfile: 'default' })
+// Legacy desktop: only the profile atom present, == active, single-connection.
+const legacy = resolveUsageScope({ focusedOwner: null, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' })
 check('legacy focus==active: fetch active, not diverged', legacy.fetchProfile === 'default' && legacy.diverged === false)
 
-// Divergence: focused bot tile on Alice while the socket is homed on default.
+// Divergence: focused bot tile on Alice, socket homed on default.
 const diverged = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
   focusedProfile: 'Alice',
+  activeConnectionId: 'local',
   activeProfile: 'default'
 })
-check('focus!=active: fetched/keyed scope stays the ACTIVE socket profile', diverged.fetchProfile === 'default')
-check('focus!=active: divergence is surfaced for honest labeling', diverged.diverged === true)
-check('focus!=active: focus identity preserved for the scope note', diverged.focusProfile === 'Alice')
+check('focus!=active: fetched/keyed scope stays the ACTIVE socket source', diverged.fetchProfile === 'default')
+check('focus!=active: divergence is surfaced (fail closed)', diverged.diverged === true)
+check('focus!=active: focus identity preserved for the gate', diverged.focusProfile === 'Alice')
 
-// Absent legacy half-shape: focusedProfile missing entirely -> active wins, no crash.
-const absent = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeProfile: 'worker' })
+// #1 SAME-PROFILE REMOTE COLLISION: names both "Alice" but different
+// connections — the focused remote chat must NOT be treated as the active
+// Alice account. Connection qualification must catch it.
+const sameProfileRemote = resolveUsageScope({
+  focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' },
+  focusedProfile: 'Alice',
+  activeConnectionId: 'remote-main',
+  activeProfile: 'Alice'
+})
+check('#1 same-profile remote: names match but connections differ -> DIVERGED', sameProfileRemote.diverged === true)
+check('#1 same-profile remote: never guesses same account', sameProfileRemote.source === 'foreign')
+
+// #1 FAIL-CLOSED: active source identity unavailable -> cannot verify focus.
+const unverifiable = resolveUsageScope({
+  focusedOwner: { connectionId: 'local', profile: 'Alice' },
+  focusedProfile: 'Alice',
+  activeConnectionId: '',
+  activeProfile: 'Alice'
+})
+check('#1 unverifiable active source: fail closed -> DIVERGED', unverifiable.diverged === true)
+check('#1 unverifiable: never serves data under an unverified account', unverifiable.source === 'foreign')
+
+// Absent legacy half-shape: focusedProfile missing entirely -> active wins.
+const absent = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeConnectionId: 'worker', activeProfile: 'worker' })
 check('no focus atoms: fall back to active profile, not diverged', absent.fetchProfile === 'worker' && absent.focusProfile === 'worker' && absent.diverged === false)
 
 // Empty/whitespace active profile normalizes.
-const emptyActive = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeProfile: '   ' })
+const emptyActive = resolveUsageScope({ focusedOwner: null, focusedProfile: '', activeConnectionId: '', activeProfile: '   ' })
 check('blank active profile normalizes to default', emptyActive.fetchProfile === 'default')
 
 // ── Profile-switch detection: never infer a switch from socket state alone ──
@@ -115,25 +141,36 @@ check('stuck gateway settles only after the bounded window', shouldSettleProfile
 check('stuck gateway does NOT settle before the window', shouldSettleProfileSwitch(false, true, 4_000, 12_000) === false)
 check('no switch in flight needs no settling', shouldSettleProfileSwitch(false, false, 0, 12_000) === false)
 
-// ── Query key: pane and chip must be ONE key, and it must equal the fetch scope ──
-const keyA = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'open')
-const keyB = providerUsageQueryKey('Bob', 'xai-oauth', 'grok-4.6', 'open')
-check('keys differ across fetch profiles', JSON.stringify(keyA) !== JSON.stringify(keyB))
-check('key carries the FETCH scope, not a focus hint', JSON.stringify(keyA) !== JSON.stringify(providerUsageQueryKey('focus-alice', 'xai-oauth', 'grok-4.6', 'open')))
+// ── Query key: stable source, NO gateway state (reconnect must not lose rows) ──
+const keyA = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'))
+const keyB = providerUsageQueryKey('Bob', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Bob'))
+check('keys differ across fetch sources', JSON.stringify(keyA) !== JSON.stringify(keyB))
+check('key carries the FETCH source, not a focus hint', JSON.stringify(keyA) !== JSON.stringify(providerUsageQueryKey('focus-alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'))))
+
+// Same profile name on a DIFFERENT connection keys differently (no collision).
+const keyAliceRemote = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('remote-main', 'Alice'))
+check('#1 cache key is connection-qualified (no same-profile collision)', JSON.stringify(keyA) !== JSON.stringify(keyAliceRemote))
 
 // The /overview payload is provider+model; the session does not change the
-// request, so it must not fragment the cache (pane using stored, chip using
-// runtime id was the old split). Identical inputs -> identical key.
-check('session id does not fragment the usage cache', JSON.stringify(keyA) === JSON.stringify(providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'open', 'any-session-id')))
+// request, so it must not fragment the cache (pane + chip share ONE key).
+check('session id does not fragment the usage cache', JSON.stringify(keyA) === JSON.stringify(providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'), 'any-session-id')))
+// The key carries NO gateway slot: a reconnect with the SAME source yields the
+// SAME key, so the last cached rows survive and render stale. (Live reconnect
+// retention is exercised in the mounted hook harness; here we pin the shape.)
+check('#4 query key carries no gateway slot (reconnect keeps rows)', !JSON.stringify(keyA).includes('"open"') && !JSON.stringify(keyA).includes('"closed"'))
 
-// ── Provider memory is per fetch scope; initialProvider must not leakprofiles ──
-rememberProvider('Alice', 'openai-codex')
-check('provider remembered under its own fetch scope', rememberedProvider('Alice') === 'openai-codex')
-check('provider does not leak into another profile', rememberedProvider('Bob') === '')
-check('remembered lookup falls back to empty, not a cross-profile token', rememberedProvider('ChaosForge') !== 'openai-codex')
+// ── Provider memory is per SOURCE; initialProvider must not leak accounts ──
+const aliceLocal = activeSourceId('local', 'Alice')
+rememberProvider(aliceLocal, 'openai-codex')
+check('provider remembered under its own connection-qualified source', rememberedProvider(aliceLocal) === 'openai-codex')
+check('provider does not leak into another profile', rememberedProvider(activeSourceId('local', 'Bob')) === '')
+// Same profile name, different connection -> separate memory (no remote collision).
+const aliceRemote = activeSourceId('remote-main', 'Alice')
+rememberProvider(aliceRemote, 'deepseek')
+check('#1 provider memory is connection-qualified (remote Alice separate)', rememberedProvider(aliceRemote) === 'deepseek' && rememberedProvider(aliceLocal) === 'openai-codex')
 
-// ── OpenCode Go: the chip may compress to 5h/wk, but must NOT hide a blocking ──
-// exhausted monthly window.
+// ── OpenCode Go: chip never hides a blocking/exhausted window, and ordering ──
+// puts the BLOCKING meter FIRST so truncation can't cut it.
 const opencodeBlockedMonthly = {
   id: 'opencode-go',
   label: 'OpenCode',
@@ -153,6 +190,7 @@ const opencodeBlockedMonthly = {
 const chipBlocked = statusFundingSummary(opencodeBlockedMonthly, 'mimo-v2.5')
 check('blocking exhausted monthly is surfaced in the chip', chipBlocked.includes('mo 0%'))
 check('blocking exhausted monthly keeps its siblings visible', chipBlocked.includes('5h 44%') && chipBlocked.includes('wk 61%'))
+check('#6 blocking meter comes FIRST (not appended after 5h/wk)', chipBlocked.indexOf('mo 0%') < chipBlocked.indexOf('5h 44%'))
 
 // A healthy monthly stays compressed out of the chip for readability.
 const opencodeHealthy = structuredClone(opencodeBlockedMonthly)
@@ -164,7 +202,7 @@ check('healthy monthly stays omitted from the compact chip', !chipHealthy.includ
 const opencodeAllGone = structuredClone(opencodeBlockedMonthly)
 for (const w of opencodeAllGone.limits[0].windows) w.remaining_percent = 0
 const chipAllGone = statusFundingSummary(opencodeAllGone, 'mimo-v2.5')
-check('exhausted surface reports every zeroed window', chipAllGone.includes('mo 0%') && chipAllGone.includes('wk 0%'))
+check('exhausted surface reports every zeroed window', chipAllGone.includes('mo 0%') && chipAllGone.includes('wk 0%') && chipAllGone.includes('5h 0%'))
 
 if (failures > 0) {
   throw new Error(`${failures} behavioral assertion(s) failed`)
