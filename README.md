@@ -6,7 +6,7 @@ The plugin reports shared provider limits, not usage for one chat. If five sessi
 
 ## Interface previews
 
-These images render the plugin's own 420px right pane and status-strip chip, using sample data. No real account values appear. They reflect the pane's actual density, blue accent, section hierarchy, and the two-window compact chip (OpenCode Go keeps the monthly window in the pane).
+These images use sample data, but the pane preview now mirrors the plugin's actual 420px structure: its type scale, spacing, hairline dividers, section hierarchy, responsive meter columns, and low-emphasis status button. The accent follows the active Hermes theme, and line wrapping can change when the pane is resized. No real account values appear.
 
 ![Provider Usage pane (sample data)](assets/provider-usage-demo.png)
 
