@@ -4,13 +4,13 @@ Provider Usage puts the account limit that matters beside the model you are usin
 
 The plugin reports shared provider limits, not usage for one chat. If five sessions use the same Codex account, they all draw from the same allowance.
 
-## Interface concepts
+## Interface previews
 
-These documentation mockups explain the plugin's behavior with sample data. They are not pixel-for-pixel captures of Hermes Desktop. The live pane uses Hermes Desktop's denser typography, dividers, provider rows, and status-strip styling.
+These images render the plugin's own 420px right pane and status-strip chip, using sample data. No real account values appear. They reflect the pane's actual density, blue accent, section hierarchy, and the two-window compact chip (OpenCode Go keeps the monthly window in the pane).
 
-![Documentation mockup of the Provider Usage pane](assets/provider-usage-demo.png)
+![Provider Usage pane (sample data)](assets/provider-usage-demo.png)
 
-![Documentation mockup of compact subscription, credit-only, and paid-fallback states](assets/provider-usage-status-states.png)
+![Compact subscription, credit-only, and paid-fallback states (sample data)](assets/provider-usage-status-states.png)
 
 *No real account information appears in these images.*
 
