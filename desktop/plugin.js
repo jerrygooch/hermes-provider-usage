@@ -9,13 +9,21 @@ import {
   haptic,
   icons,
   useQuery,
-  useValue
+  useValue,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ROUTES_AREA,
+  SIDEBAR_NAV_AREA,
+  PALETTE_AREA
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
 
 const REFRESH_MS = 60_000
 const HAIRLINE = '1px solid var(--ui-stroke-tertiary)'
+// Route the "all providers" full page mounts at (Settings-style workspace page).
+const OVERVIEW_ROUTE = '/provider-usage'
 const textPrimary = { color: 'var(--ui-text-primary)' }
 const textSecondary = { color: 'var(--ui-text-secondary)' }
 const textTertiary = { color: 'var(--ui-text-tertiary)' }
@@ -1028,19 +1036,26 @@ function LimitedProviders({ rows }) {
 }
 
 function openOverview(ctx, fetchProfile, initialProvider, sourceId) {
-  // Scope the open-time provider hint to the source the pane will actually
+  // Scope the open-time provider hint to the source the page will actually
   // query (the active account), so it never leaks across a switch.
   const memoKey = sourceId || profileScope(fetchProfile)
   if (initialProvider) rememberProvider(memoKey, initialProvider)
+  // Full workspace page (Settings-style): every provider, all windows, resets,
+  // balances, and metadata. Feature-detect navigate; older builds fall back to
+  // a docked workspace tab.
+  if (typeof host.navigate === 'function') {
+    host.navigate(OVERVIEW_ROUTE)
+    return
+  }
   if (typeof host.openWorkspace === 'function') {
     host.openWorkspace('provider-usage-overview', {
       title: 'Provider usage',
       minWidth: 400,
-      render: () => jsx(ProviderUsagePane, { ctx })
+      render: () => jsx(ProviderUsagePage, { ctx })
     })
     return
   }
-  host.notify({ kind: 'info', message: 'Provider usage is available in the Provider Usage pane.' })
+  host.notify({ kind: 'info', message: 'Provider usage is available in the Provider Usage page.' })
 }
 
 function ActiveUsageChip({ ctx }) {
@@ -1104,27 +1119,195 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope, backendGone)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
 
-  return jsx(Tip, {
-    label: description,
-    children: jsxs(Button, {
-      type: 'button',
-      variant: 'ghost',
-      size: 'micro',
-      'aria-label': description,
-      onClick: () => {
-        haptic('tap')
-        openOverview(ctx, scope.fetchProfile, provider || row?.id, scope.sourceId)
-      },
-      style: { maxWidth: 230, fontVariantNumeric: 'tabular-nums' },
-      children: [
-        jsx(Icon, { 'aria-hidden': true }, 'icon'),
-        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` }, 'label')
-      ]
-    })
+  return jsxs(Popover, {
+    children: [
+      jsx(PopoverTrigger, {
+        asChild: true,
+        children: jsx(Tip, {
+          label: description,
+          children: jsxs(Button, {
+            type: 'button',
+            variant: 'ghost',
+            size: 'micro',
+            'aria-label': description,
+            onClick: () => haptic('tap'),
+            style: { maxWidth: 230, fontVariantNumeric: 'tabular-nums' },
+            children: [
+              jsx(Icon, { 'aria-hidden': true }, 'icon'),
+              jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${label} · ${summary}` }, 'label')
+            ]
+          })
+        })
+      }),
+      jsx(PopoverContent, {
+        align: 'end',
+        side: 'top',
+        sideOffset: 8,
+        collisionPadding: 8,
+        style: { width: 340, maxHeight: 'min(84vh, 460px)', overflowY: 'auto', overflowX: 'hidden', padding: 0 },
+        children: jsx(ChipUsagePopover, {
+          ctx,
+          model,
+          scope,
+          row,
+          state,
+          query,
+          backendGone,
+          provider: provider || row?.id
+        })
+      })
+    ]
   })
 }
 
-function ProviderUsagePane({ ctx, initialProvider = '' }) {
+function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, provider }) {
+  // Compact current-provider detail popover. Shows only the ACTIVE provider's
+  // extra details (its windows, reset, balance), plus a way to open the full
+  // page. Respects the same divergence/back-end state as the chip.
+  const viewAll = jsxs(Button, {
+    type: 'button',
+    variant: 'secondary',
+    size: 'xs',
+    'aria-label': 'View all providers',
+    onClick: () => {
+      haptic('tap')
+      openOverview(ctx, scope.fetchProfile, provider, scope.sourceId)
+    },
+    style: { width: '100%', justifyContent: 'center' },
+    children: [
+      jsx(icons.BarChart3, { 'aria-hidden': true, style: { width: 12, height: 12 } }, 'icon'),
+      jsx('span', { children: 'View all providers' })
+    ]
+  })
+
+  if (backendGone) {
+    return jsxs('div', {
+      style: { display: 'grid', gap: 12, padding: 16 },
+      children: [
+        jsx('div', { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 15, height: 15, color: 'var(--ui-text-tertiary)' } }, 'icon'), jsx('strong', { style: { ...textPrimary, fontSize: 12, fontWeight: 600 }, children: `Not enabled in ${scope.fetchProfile}` }, 'title')] }),
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in that profile to see usage. Hermes never edits profiles automatically.' }),
+        viewAll
+      ]
+    })
+  }
+
+  if (scope.diverged) {
+    return jsxs('div', {
+      style: { display: 'grid', gap: 12, padding: 16 },
+      children: [
+        jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: `The focused chat is in ${scope.focusProfile}. Usage here follows the active profile (${scope.fetchProfile}).` }),
+        viewAll
+      ]
+    })
+  }
+
+  if (!row) {
+    return jsxs('div', {
+      style: { display: 'grid', gap: 12, padding: 16 },
+      children: [
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: query.isLoading ? 'Checking provider accounts…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
+        viewAll
+      ]
+    })
+  }
+
+  const refreshButton = jsx(Tip, {
+    label: query.isFetching ? 'Refreshing provider usage' : 'Refresh provider usage',
+    children: jsx(Button, {
+      type: 'button',
+      variant: 'ghost',
+      size: 'icon-xs',
+      disabled: query.isFetching,
+      'aria-label': 'Refresh provider usage',
+      onClick: () => {
+        haptic('tap')
+        void query.refetch()
+      },
+      children: jsx(icons.RefreshCw, { 'aria-hidden': true })
+    })
+  })
+
+  const isBalance = state.kind === 'balance'
+  const fundingHeadline = isBalance
+    ? (state.fallback ? `${money(state.balance)} extra` : money(state.balance))
+    : compactFundingSummary(row, model)
+  const fundingDetail = isBalance
+    ? 'Requests are billed from this provider balance.'
+    : state.kind === 'subscription'
+      ? `${row?.plan || 'Subscription'} allowance`
+      : row?.unavailable_reason || 'No usage data is exposed.'
+
+  const windows = (state.windows || []).filter(window => round(window?.remaining_percent) != null)
+  const meterTone = window => {
+    const remaining = round(window?.remaining_percent)
+    if (remaining != null && remaining <= 0) return 'var(--dt-destructive)'
+    if (remaining != null && remaining <= 15) return 'var(--ui-orange)'
+    return 'var(--ui-accent)'
+  }
+
+  return jsxs('div', {
+    style: { display: 'grid', gap: 0 },
+    children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', borderBottom: HAIRLINE },
+        children: [
+          jsxs('div', { style: { minWidth: 0, display: 'grid', gap: 2 }, children: [
+            jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }, children: [
+              jsx(StatusDot, { tone: row.available ? 'good' : 'muted' }),
+              jsx('strong', { style: { ...textPrimary, fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label })
+            ] }),
+            jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: model || scope.fetchProfile })
+          ] }),
+          refreshButton
+        ]
+      }),
+      jsxs('div', {
+        style: { display: 'grid', gap: 12, padding: '12px 14px' },
+        children: [
+          // Funding headline (compact)
+          jsxs('div', {
+            style: { borderLeft: '2px solid var(--ui-accent)', padding: '2px 0 2px 10px', display: 'grid', gap: 1 },
+            children: [
+              jsx('span', { style: { ...textTertiary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.07em' }, children: 'Current request funding' }),
+              jsx('strong', { style: { ...textPrimary, fontSize: 15, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }, children: fundingHeadline }),
+              jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail })
+            ]
+          }),
+          // Governing meters, compact
+          windows.length > 0
+            ? jsxs('div', { style: { display: 'grid', gap: 8 }, children: windows.map(window => jsxs('div', {
+                style: { display: 'grid', gap: 4 },
+                children: [
+                  jsxs('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }, children: [
+                    jsx('span', { style: { ...textSecondary, fontSize: 10, fontWeight: 500 }, children: cleanWindowLabel(window) }),
+                    jsx('strong', { style: { ...textPrimary, color: meterTone(window), fontSize: 11, fontVariantNumeric: 'tabular-nums' }, children: `${round(window.remaining_percent)}% left` })
+                  ] }),
+                  jsx('div', {
+                    role: 'progressbar',
+                    'aria-label': `${cleanWindowLabel(window)} remaining`,
+                    'aria-valuemin': 0,
+                    'aria-valuemax': 100,
+                    'aria-valuenow': round(window.remaining_percent),
+                    style: { height: 4, borderRadius: 2, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
+                    children: jsx('div', { style: { width: progressWidth(window), height: '100%', borderRadius: 2, background: meterTone(window) } })
+                  }),
+                  jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.4 }, children: windowMeta(window) })
+                ]
+              }, `meter-${window?.label}`)) })
+            : null,
+          // Balance, if any
+          state.balance
+            ? jsx(BalanceMetric, { balance: state.balance, subdued: row?.id === 'openai-codex' })
+            : null,
+          // Pin the expand button at the bottom
+          jsx('div', { style: { borderTop: HAIRLINE, paddingTop: 10, marginTop: 2 }, children: viewAll })
+        ]
+      })
+    ]
+  })
+}
+
+function ProviderUsagePage({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
   const activeProfile = useValue(host.state.profile)
@@ -1139,12 +1322,12 @@ function ProviderUsagePane({ ctx, initialProvider = '' }) {
   // the active socket ctx.rest can reach, so we neither fetch nor probe — we
   // gate and tell the user to switch.
   if (scope.diverged) {
-    return jsx(GatedUsagePane, { scope })
+    return jsx(GatedUsagePage, { scope })
   }
-  return jsx(ProviderUsagePaneBody, { ctx, initialProvider, model, sessionId, gateway, scope })
+  return jsx(ProviderUsagePageBody, { ctx, initialProvider, model, sessionId, gateway, scope })
 }
 
-function GatedUsagePane({ scope }) {
+function GatedUsagePage({ scope }) {
   const header = jsxs('header', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 18px', borderBottom: HAIRLINE },
     children: [
@@ -1165,7 +1348,7 @@ function GatedUsagePane({ scope }) {
   return jsxs('div', { style: { height: '100%', minWidth: 0, overflow: 'hidden', color: 'var(--ui-text-primary)', fontSize: 12 }, children: [header, body] })
 }
 
-function ProviderUsagePaneBody({ ctx, initialProvider, model, sessionId, gateway, scope }) {
+function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway, scope }) {
   const ready = gatewayReady(gateway)
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
   const provider = useActiveProvider(sessionId, initialProvider, scope.fetchProfile, scope.ownerConnection, scope.sourceId)
@@ -1310,14 +1493,33 @@ export default {
   name: 'Provider Usage',
   defaultEnabled: true,
   register(ctx) {
+    // Full Settings-style workspace page: every provider, all windows, resets,
+    // balances, and metadata. Reachable via the chip popover, the sidebar nav
+    // row, and the ⌘K palette — never an always-on pane.
     ctx.register({
-      id: 'overview-pane',
-      area: 'panes',
-      title: 'Provider usage',
-      order: 120,
-      data: { placement: 'right', width: '420px' },
-      render: () => jsx(ProviderUsagePane, { ctx })
+      id: 'overview-page',
+      area: ROUTES_AREA,
+      data: { path: OVERVIEW_ROUTE },
+      render: () => jsx(ProviderUsagePage, { ctx })
     })
+    ctx.register({
+      id: 'nav',
+      area: SIDEBAR_NAV_AREA,
+      data: { path: OVERVIEW_ROUTE, label: 'Provider Usage', codicon: 'gauge' }
+    })
+    ctx.register({
+      id: 'open',
+      area: PALETTE_AREA,
+      data: {
+        id: 'open-provider-usage',
+        label: 'Provider Usage',
+        icon: icons.BarChart3,
+        keywords: ['usage', 'provider', 'credits', 'balance'],
+        run: () => host.navigate(OVERVIEW_ROUTE)
+      }
+    })
+    // Toolbar chip: click to pop the current provider's details; the popover's
+    // "View all providers" opens the full page.
     ctx.register({
       id: 'active-chip',
       area: 'statusBar.right',

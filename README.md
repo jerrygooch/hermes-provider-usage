@@ -1,44 +1,45 @@
 # Hermes Provider Usage
 
-Provider Usage puts the account limit that matters beside the model you are using in Hermes Desktop. The status-bar chip stays compact. Open the pane when you want every available window, reset time, balance, and account detail.
+Provider Usage puts the account limit that matters beside the model you are using in Hermes Desktop. The status-bar chip stays compact. **Click it** to see the current provider's details in a popover, and **"View all providers"** opens a full page (like Settings) with every window, reset time, balance, and account detail.
 
 The plugin reports shared provider limits, not usage for one chat. If five sessions use the same Codex account, they all draw from the same allowance.
 
 ## Interface previews
 
-These images use sample data, but the pane preview now mirrors the plugin's actual 420px structure: its type scale, spacing, hairline dividers, section hierarchy, responsive meter columns, and low-emphasis status button. The accent follows the active Hermes theme, and line wrapping can change when the pane is resized. No real account values appear.
+These images use sample data, rendered from the plugin's actual components (not hand-written mockups): a real SDK-styled full page and the toolbar popover. The accent follows the active Hermes theme. No real account values appear. See `harness/` for the reproducible capture.
 
-![Provider Usage pane (sample data)](assets/provider-usage-demo.png)
+![Provider Usage full page (sample data)](assets/provider-usage-page.png)
 
-![Compact subscription, credit-only, and paid-fallback states (sample data)](assets/provider-usage-status-states.png)
+![Provider Usage toolbar popover (sample data)](assets/provider-usage-popover.png)
 
 *No real account information appears in these images.*
 
 ## What it does
 
 - Adds a small active-provider meter to the bottom-right status area.
-- Opens a full Provider Usage pane with the focused provider first.
+- **Click the chip** → a popover shows the current provider's funding summary, governing meters, and reset times.
+- **"View all providers"** in that popover → a full Provider Usage page (Settings-style) with every window, balance, and account detail. Reachable too from the sidebar nav row and the ⌘K palette.
 - Keeps subscription allowances primary and paid fallback balances secondary.
 - Shows every governing window when a model has more than one limit.
-- Refreshes the pane and status chip against the focused profile and session when switching profiles or bots.
+- Refreshes the page and status chip against the focused profile and session when switching profiles or bots.
 - Keeps API keys and OAuth credentials in the Python backend.
 - Marks missing data as unavailable instead of filling gaps with guesses.
 
-A Spark session is a useful example. Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the pane keeps both subscription meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
+A Spark session is a useful example. Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the page keeps both subscription meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
 
 ## Provider support
 
 | Provider | What the plugin can show |
 | --- | --- |
 | OpenAI Codex | Shared subscription windows, Spark-specific windows, resets, access state, and subdued extra-usage balance when returned |
-| OpenCode Go | 5-hour and weekly usage in the status chip; all three subscription windows, including monthly, in the pane |
+| OpenCode Go | 5-hour and weekly usage in the status chip; all three subscription windows, including monthly, in the page |
 | OpenCode Zen | Authenticated API-credit product state; wallet balance and spend remain unavailable because OpenCode does not expose them to API keys |
 | DeepSeek | API balance in the currency returned by DeepSeek |
 | OpenRouter | Remaining API credit balance |
 | SuperGrok / xAI OAuth | SuperGrok subscription quota and reset data returned by the Grok billing endpoint |
 | Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it |
 
-OpenCode appears as one provider family in the pane, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.
+OpenCode appears as one provider family in the popover/page, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.
 
 The Grok billing response used here exposes quota data but does not provide a trustworthy plan-tier name. The plugin therefore uses the conservative label **SuperGrok** and does not infer a higher tier.
 
@@ -48,7 +49,7 @@ See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, limitati
 
 1. Read the provider and model from the focused Hermes session.
 2. Use the applicable subscription allowance when one governs that model.
-3. Show every governing subscription window in the detailed pane.
+3. Show every governing subscription window in the detailed page.
 4. Use paid extra usage or API credits only when a governing subscription window is exhausted or the product is credit-only.
 5. Preserve the provider's own currency, timestamps, and unavailable states.
 
@@ -60,7 +61,7 @@ The focused session selects the meter. It does not own a private quota.
 Hermes Desktop plugin                Hermes Python plugin
 (no credentials)                     (credential boundary)
 ────────────────────────             ─────────────────────────────
-status chip and detail pane   ───▶   normalized provider overview
+status chip and detail popover/page   ───▶   normalized provider overview
 focused provider/model        ◀───   limits, balances, resets, state
 ```
 
@@ -92,11 +93,11 @@ Then run `hermes config set plugins.enabled` with the current entries plus `prov
 
 ### Backend is per profile
 
-The Python backend (`dashboard/plugin_api.py`) is a **per-profile** install: it loads only when `provider-usage` is in that profile's `plugins.enabled` and its backend folder exists under that profile's `~/.hermes/profiles/<profile>/plugins/provider-usage/dashboard/`. A profile without the backend returns HTTP 404 for `/overview`, and the plugin says exactly that — **"Provider usage isn't enabled or installed in <profile>"** — on both the pane and the toolbar chip. It never auto-enables or auto-installs the backend, and never edits a real profile. If you use more than one profile, install and enable the backend in each profile where you want a usage readout.
+The Python backend (`dashboard/plugin_api.py`) is a **per-profile** install: it loads only when `provider-usage` is in that profile's `plugins.enabled` and its backend folder exists under that profile's `~/.hermes/profiles/<profile>/plugins/provider-usage/dashboard/`. A profile without the backend returns HTTP 404 for `/overview`, and the plugin says exactly that — **"Provider usage isn't enabled or installed in <profile>"** — on both the page and the toolbar chip. It never auto-enables or auto-installs the backend, and never edits a real profile. If you use more than one profile, install and enable the backend in each profile where you want a usage readout.
 
 ## Profile scoping & focus divergence
 
-`ctx.rest` reaches the **active** socket's profile and connection, never the focused chat's. The plugin treats a focused session as readable only when its connection-qualified owner (the SDK's `focusedSessionOwner` atom) matches that active source. When a focused chat belongs to a different profile or connection (or the SDK reports the focus as ambiguous), the plugin **fails closed**: the pane and chip gate with "The focused chat is in … — switch to view its usage" and issue no fetch or probe for a foreign account — home-account rows are never shown under another account's focus, even when two sources share a profile name. On return to a matching profile, the cached rows for that account come back.
+`ctx.rest` reaches the **active** socket's profile and connection, never the focused chat's. The plugin treats a focused session as readable only when its connection-qualified owner (the SDK's `focusedSessionOwner` atom) matches that active source. When a focused chat belongs to a different profile or connection (or the SDK reports the focus as ambiguous), the plugin **fails closed**: the page and chip gate with "The focused chat is in … — switch to view its usage" and issue no fetch or probe for a foreign account — home-account rows are never shown under another account's focus, even when two sources share a profile name. On return to a matching profile, the cached rows for that account come back.
 
 ## Development
 
@@ -113,6 +114,8 @@ The browser component harness (real Chromium, real SDK primitives, per-fixture P
 
 ```bash
 node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
+# the toolbar chip → popover interaction is verified by: 
+node harness/popover-verify.mjs
 ```
 
 The fixture suite covers:
@@ -121,7 +124,7 @@ The fixture suite covers:
 - Spark's 5-hour and weekly limits;
 - the Plus 5-hour window;
 - DeepSeek API balances;
-- OpenCode Go's compact 5-hour/weekly chip and complete three-window pane;
+- OpenCode Go's compact 5-hour/weekly chip and complete three-window page;
 - separate OpenCode Go and Zen funding semantics;
 - SuperGrok's conservative plan label;
 - paid fallback after subscription exhaustion.

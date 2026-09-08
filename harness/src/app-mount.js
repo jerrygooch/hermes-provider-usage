@@ -48,15 +48,17 @@ export function mountPlugin(pluginModule) {
   const meta = { id: plugin.id, name: plugin.name, defaultEnabled: plugin.defaultEnabled }
   plugin.register(ctx)
 
-  const pane = contributions.find(c => c.area === 'panes')
+  const page = contributions.find(c => c.area === 'routes')
   const chip = contributions.find(c => c.area === 'statusBar.right')
-  if (!pane || !chip) {
-    throw new Error(`Expected pane (panes) and chip (statusBar.right) contributions; got ${contributions.map(c => c.area).join(',')}`)
+  if (!page || !chip) {
+    throw new Error(`Expected page (routes) and chip (statusBar.right) contributions; got ${contributions.map(c => c.area).join(',')}`)
   }
 
   window.__CAPTURE__ = Object.assign(window.__CAPTURE__ || {}, { registered: { id: meta.id, name: meta.name }, restCalls })
   mountContribution('chip-root', chip.render, { width: window.__CAPTURE__.chipWidth || 320 })
-  mountContribution('pane-root', pane.render, { width: window.__CAPTURE__.paneWidth || 420, height: window.__CAPTURE__.paneHeight || 900 })
+  // The full page renders in the workspace (Settings-style); give it page
+  // bounds. Container id stays 'pane-root' for the existing capture scripts.
+  mountContribution('pane-root', page.render, { width: window.__CAPTURE__.paneWidth || 760, height: window.__CAPTURE__.paneHeight || 1100 })
 
   // Static-markup DOM snapshot (geometry + text) for the capture script. Poll
   // until React has actually committed the plugin's content, then measure.

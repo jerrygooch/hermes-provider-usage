@@ -18,7 +18,13 @@ const sdkValues = {
   haptic: () => {},
   icons: new Proxy({}, { get: () => component }),
   useQuery: () => ({}),
-  useValue: () => null
+  useValue: () => null,
+  Popover: component,
+  PopoverContent: component,
+  PopoverTrigger: component,
+  ROUTES_AREA: 'routes',
+  SIDEBAR_NAV_AREA: 'sidebar-nav',
+  PALETTE_AREA: 'palette'
 }
 const reactValues = { useEffect: () => {}, useState: value => [value, () => {}], useRef: () => ({}) }
 const jsxValues = { jsx: component, jsxs: component }

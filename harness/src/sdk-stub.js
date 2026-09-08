@@ -24,12 +24,16 @@ import { Badge } from '@/components/ui/badge'
 import { Loader } from '@/components/ui/loader'
 import { RowButton } from '@/components/ui/row-button'
 import { StatusDot } from '@/components/status-dot'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import * as icons from '@/lib/icons'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
 // Real SDK UI primitives, re-exported so the plugin imports them faithfully.
-export { Button, Badge, Loader, RowButton, StatusDot, icons }
+export { Button, Badge, Loader, RowButton, StatusDot, icons, Popover, PopoverContent, PopoverTrigger }
+export const ROUTES_AREA = 'routes'
+export const SIDEBAR_NAV_AREA = 'sidebar-nav'
+export const PALETTE_AREA = 'palette'
 
 // ---- Fixture loader: injects the active scenario before the app boots ----
 // window.__FIXTURE__ = { overview, host: {...}, rest: 'ok'|'404'|'error',

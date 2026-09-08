@@ -153,6 +153,8 @@ async function harness(initial = {}) {
   const reactBoxed = { useEffect: React.useEffect, useState: React.useState, useRef: React.useRef, useCallback: undefined }
   const sdkValues = {
     Badge: sdkComponent, Button: sdkComponent, Loader: sdkComponent, RowButton: sdkComponent, StatusDot: sdkComponent, Tip: sdkComponent,
+    Popover: sdkComponent, PopoverContent: sdkComponent, PopoverTrigger: sdkComponent,
+    ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar-nav', PALETTE_AREA: 'palette',
     host, haptic: () => {}, icons: new Proxy({}, { get: () => sdkComponent }),
     useQuery, useValue
   }
@@ -186,7 +188,7 @@ async function harness(initial = {}) {
   }
   mod.namespace.default.register(ctx)
   const chipEl = React.createElement(contributions.find(c => c.area === 'statusBar.right').render)
-  const paneEl = React.createElement(contributions.find(c => c.area === 'panes').render)
+  const pageEl = React.createElement(contributions.find(c => c.area === 'routes').render)
 
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -199,12 +201,12 @@ async function harness(initial = {}) {
   const inAct = fn => ReactAct(async () => { await fn() })
   const flush = async () => { await inAct(async () => {}); await inAct(async () => {}) }
   const mountChip = async () => { await inAct(async () => { root.render(chipEl) }); await flush() }
-  const mountPane = async () => { await inAct(async () => { root.render(paneEl) }); await flush() }
+  const mountPage = async () => { await inAct(async () => { root.render(pageEl) }); await flush() }
   const text = () => container.textContent
   const unmount = () => { ReactAct(() => { root.unmount() }); document.body.removeChild(container) }
 
   return {
-    mod, setState, emit, setQuery, queryResult: querySnap, requests, restCalls, text, inAct, mountChip, mountPane, unmount, flush,
+    mod, setState, emit, setQuery, queryResult: querySnap, requests, restCalls, text, inAct, mountChip, mountPage, unmount, flush,
     get queryCalls() { return queryCalls },
     get lastQueryKey() { return lastQueryKey },
     readonly: atoms,
@@ -298,7 +300,7 @@ const fixture = () => ({
 {
   const h = await harness({ sessionId: undefined, focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
   h.setQuery({ data: fixture(), isLoading: false, isError: false })
-  await h.mountPane()
+  await h.mountPage()
   const keyOpen = JSON.stringify(h.lastQueryKey)
   check('S4 pane loaded from cached data', h.text().includes('62% left'), h.text())
 
@@ -316,7 +318,7 @@ const fixture = () => ({
 {
   const h = await harness({ sessionId: undefined, focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
   h.setQuery({ data: null, isLoading: false, isError: true, isFetching: false, error: { status: 404, message: 'plugin namespace not enabled' } })
-  await h.mountPane()
+  await h.mountPage()
   check('#7 missing backend: explicit not-enabled copy in pane', h.text().includes("isn't enabled or installed"), h.text())
   check('#7 no automatic profile edits (only read-only overview call)', h.restCalls.every(c => c.path === '/overview' && c.opts.method === 'POST'), JSON.stringify(h.restCalls))
   h.unmount()
@@ -328,7 +330,7 @@ const fixture = () => ({
 {
   const h = await harness({ sessionId: 'sess-alice', focusedOwner: { connectionId: 'local', profile: 'Alice' }, focusedProfile: 'Alice' })
   h.setQuery({ data: fixture(), isLoading: false, isError: false })
-  await h.mountPane()
+  await h.mountPage()
   check('#2 diverged pane gates (names the focus profile)', h.text().includes('focused chat is in Alice'), h.text())
   check('#2 diverged pane tells the user to switch', h.text().includes('Switch to Alice to view its provider usage'), h.text())
   check('#2 diverged pane does NOT fetch for the foreign account', h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
@@ -352,7 +354,7 @@ const fixture = () => ({
   const h = await harness({ sessionId: 'sess-remote', connectionId: 'remote-main', profile: 'Alice', focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, focusedProfile: 'Alice' })
   const scope = h.scopeOf({ focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'remote-main', activeProfile: 'Alice' })
   check('#1 same-profile remote: diverged at resolve level', scope.diverged === true, JSON.stringify(scope))
-  await h.mountPane()
+  await h.mountPage()
   check('#1 same-profile remote: pane gates (no wrong-account data)', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
   check('#1 same-profile remote: no probe of the foreign session', h.requests.length === 0, JSON.stringify(h.requests))
   h.unmount()
@@ -362,7 +364,7 @@ const fixture = () => ({
 //        throw (the guard `host.state.X ? useValue(...) : ''` handles it). ────
 {
   const h = await harness({ sessionId: undefined, connectionId: undefined, focusedOwner: undefined, focusedProfile: undefined, gateway: undefined })
-  await h.mountPane({})
+  await h.mountPage({})
   check('#9 degraded world renders without a crash', h.text().length >= 0 && h.text().includes('Provider usage'), h.text())
   h.unmount()
 }
@@ -372,7 +374,7 @@ const fixture = () => ({
 {
   const h = await harness({ sessionId: undefined, focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
   h.setQuery({ data: fixture(), isLoading: false, isError: true, isFetching: false, error: new Error('boom') })
-  await h.mountPane()
+  await h.mountPage()
   check('#5 refetch-error keeps the stale rows', h.text().includes('Account limits'), h.text())
   check('#5 refetch-error surfaces a stale banner', h.text().includes('Could not refresh'), h.text())
   h.unmount()
@@ -392,7 +394,7 @@ const fixture = () => ({
   h.setQuery({ data: fixture(), isLoading: false, isError: false })
   const scope = h.scopeOf({ focusedOwner: null, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'local', activeProfile: 'default' })
   check('#10 null focus-owner resolves as diverged (never profile-only bypass)', scope.diverged === true && scope.source === 'ambiguous', JSON.stringify(scope))
-  await h.mountPane()
+  await h.mountPage()
   check('#10 ambiguous focus gates instead of fetching active rows', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
   check('#10 ambiguous focus does not display active-account data', !h.text().includes('Account limits'), h.text())
   h.unmount()

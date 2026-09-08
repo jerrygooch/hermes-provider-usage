@@ -65,7 +65,7 @@ const sdkHost = {
 
 const Base = ({ children, title, label, tone, ...rest }) =>
   React.createElement('span', { 'data-slot': 'aui-slot', 'data-tone': tone, title, ...rest }, children)
-const sdkComponents = { Badge: Base, Button: Base, Loader: Base, RowButton: Base, StatusDot: Base, Tip: Base }
+const sdkComponents = { Badge: Base, Button: Base, Loader: Base, RowButton: Base, StatusDot: Base, Tip: Base, Popover: Base, PopoverContent: Base, PopoverTrigger: Base }
 
 function synthetic(identifier, values) {
   return new vm.SyntheticModule(Object.keys(values), function () {
@@ -79,7 +79,10 @@ const sdkValues = {
   haptic: () => {},
   icons: new Proxy({}, { get: () => Base }),
   useQuery: config => queryResult,
-  useValue: atomLike => (atomLike && typeof atomLike.get === 'function' ? atomLike.get() : atomLike ?? null)
+  useValue: atomLike => (atomLike && typeof atomLike.get === 'function' ? atomLike.get() : atomLike ?? null),
+  ROUTES_AREA: 'routes',
+  SIDEBAR_NAV_AREA: 'sidebar-nav',
+  PALETTE_AREA: 'palette'
 }
 
 const dependencies = new Map([
@@ -96,7 +99,7 @@ await mod.link(specifier => {
 })
 await mod.evaluate()
 
-// Register the plugin and capture the chip + pane render functions.
+// Register the plugin and capture the chip + page render functions.
 const contributions = []
 const capturedCtx = {
   register: contrib => contributions.push(contrib),
@@ -111,10 +114,10 @@ const capturedCtx = {
 const plugin = mod.namespace.default
 plugin.register(capturedCtx)
 const chipContribution = contributions.find(c => c.area === 'statusBar.right')
-const paneContribution = contributions.find(c => c.area === 'panes')
-if (!chipContribution || !paneContribution) throw new Error('chips/pane not registered')
+const pageContribution = contributions.find(c => c.area === 'routes')
+if (!chipContribution || !pageContribution) throw new Error('chip/page not registered')
 const renderChip = () => renderToStaticMarkup(React.createElement(chipContribution.render))
-const renderPane = () => renderToStaticMarkup(React.createElement(paneContribution.render))
+const renderPage = () => renderToStaticMarkup(React.createElement(pageContribution.render))
 
 const fixture = fetchedAt => ({
   version: 1,
@@ -157,9 +160,9 @@ const chipLoaded = renderChip()
 check('chip renders the provider funding summary', chipLoaded, '· 62% left')
 check('chip tooltip is populated with the loaded description', chipLoaded, 'Open the Provider Usage pane for every reported window')
 
-const paneLoaded = renderPane()
-check('pane header shows the active scope', paneLoaded, 'Scope default')
-check('pane shows the loaded provider usage', paneLoaded, 'Account limits &amp; credits')
+const pageLoaded = renderPage()
+check('page header shows the active scope', pageLoaded, 'Scope default')
+check('page shows the loaded provider usage', pageLoaded, 'Account limits &amp; credits')
 
 // Verified active focus (connection-qualified owner == active source).
 world.profile = 'default'
@@ -183,10 +186,10 @@ check('#2 diverged chip shows a gate keyed to the focus profile', chipDiverged, 
 check('#2 diverged chip tooltip tells the user to switch', chipDiverged, 'Switch the active profile to Alice')
 nocheck('#2 diverged chip does NOT show active accounting under foreign focus', chipDiverged, '62% left')
 
-const paneDiverged = renderPane()
-check('#2 diverged pane names the focus profile', paneDiverged, 'The focused chat is in Alice')
-check('#2 diverged pane tells the user to switch', paneDiverged, 'Switch to Alice to view its provider usage here')
-nocheck('#2 diverged pane does NOT display active-account rows', paneDiverged, 'Account limits &amp; credits')
+const pageDiverged = renderPage()
+check('#2 diverged page names the focus profile', pageDiverged, 'The focused chat is in Alice')
+check('#2 diverged page tells the user to switch', pageDiverged, 'Switch to Alice to view its provider usage here')
+nocheck('#2 diverged page does NOT display active-account rows', pageDiverged, 'Account limits &amp; credits')
 
 // Reconnect (same profile, socket NOT ready): last rows stay visible as stale.
 world.profile = 'default'
@@ -200,10 +203,10 @@ const chipReconnecting = renderChip()
 check('reconnecting chip keeps the last figure, not "switching"', chipReconnecting, '62% left')
 check('reconnecting chip tooltip says reconnecting on the same profile', chipReconnecting, 'reconnecting')
 
-const paneReconnecting = renderPane()
-check('reconnecting pane keeps the loaded rows', paneReconnecting, 'Account limits &amp; credits')
-check('reconnecting pane surfaces an honest stale banner', paneReconnecting, 'Reconnecting — showing default usage')
-nocheck('reconnecting pane does NOT claim a profile switch', paneReconnecting, 'Switching profile — refreshing')
+const pageReconnecting = renderPage()
+check('reconnecting page keeps the loaded rows', pageReconnecting, 'Account limits &amp; credits')
+check('reconnecting page surfaces an honest stale banner', pageReconnecting, 'Reconnecting — showing default usage')
+nocheck('reconnecting page does NOT claim a profile switch', pageReconnecting, 'Switching profile — refreshing')
 
 // No rows yet + socket not ready: honest empty reconnect state.
 world.profile = 'default'
@@ -213,8 +216,8 @@ world.focusedProfile = ''
 world.gateway = 'closed'
 queryResult = { data: null, isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
-const paneEmptyReconnect = renderPane()
-check('reconnecting with no rows shows the reconnect note', paneEmptyReconnect, 'Provider usage for default will load when the connection is ready')
+const pageEmptyReconnect = renderPage()
+check('reconnecting with no rows shows the reconnect note', pageEmptyReconnect, 'Provider usage for default will load when the connection is ready')
 
 // Refetch failure with rows: stale indication must surface in panel.
 world.gateway = 'open'
@@ -222,9 +225,9 @@ world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: true, isFetching: false, error: new Error('boom'), refetch: () => {} }
-const paneStaleRefresh = renderPane()
-check('#5 refetch-error with rows keeps the rows', paneStaleRefresh, 'Account limits &amp; credits')
-check('#5 refetch-error with rows surfaces a stale banner', paneStaleRefresh, 'Could not refresh — showing default usage')
+const pageStaleRefresh = renderPage()
+check('#5 refetch-error with rows keeps the rows', pageStaleRefresh, 'Account limits &amp; credits')
+check('#5 refetch-error with rows surfaces a stale banner', pageStaleRefresh, 'Could not refresh — showing default usage')
 
 // Missing backend namespace (404): explicit "not enabled/installed", no auto-edit.
 world.gateway = 'open'
@@ -232,9 +235,9 @@ world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 queryResult = { data: null, isLoading: false, isError: true, isFetching: false, error: { status: 404, message: 'plugin namespace not enabled' }, refetch: () => {} }
-const paneMissingBackend = renderPane()
-check('#7 missing backend surfaces explicit not-enabled copy', paneMissingBackend, 'enabled or installed in default')
-check('#7 missing backend says Hermes never edits profiles', paneMissingBackend, 'Hermes never edits profiles automatically')
+const pageMissingBackend = renderPage()
+check('#7 missing backend surfaces explicit not-enabled copy', pageMissingBackend, 'enabled or installed in default')
+check('#7 missing backend says Hermes never edits profiles', pageMissingBackend, 'Hermes never edits profiles automatically')
 
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)
