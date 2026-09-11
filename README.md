@@ -114,7 +114,9 @@ The browser component harness (real Chromium, real SDK primitives, per-fixture P
 
 ```bash
 node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
-# the toolbar chip → popover interaction is verified by: 
+# The toolbar chip → popover interaction (click opens; "View all providers" present)
+# is asserted by popover-verify against the REAL Tip component, so trigger-wiring
+# regressions fail the harness instead of passing through a lenient double:
 node harness/popover-verify.mjs
 ```
 

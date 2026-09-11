@@ -1118,13 +1118,17 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
 
   const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope, backendGone)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
+  // Controlled so "View all providers" dismisses the popover as the page opens.
+  const [popoverOpen, setPopoverOpen] = useState(false)
 
   return jsxs(Popover, {
+    open: popoverOpen,
+    onOpenChange: setPopoverOpen,
     children: [
-      jsx(PopoverTrigger, {
-        asChild: true,
-        children: jsx(Tip, {
-          label: description,
+      jsx(Tip, {
+        label: description,
+        children: jsx(PopoverTrigger, {
+          asChild: true,
           children: jsxs(Button, {
             type: 'button',
             variant: 'ghost',
@@ -1153,14 +1157,15 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
           state,
           query,
           backendGone,
-          provider: provider || row?.id
+          provider: provider || row?.id,
+          onRequestClose: () => setPopoverOpen(false)
         })
       })
     ]
   })
 }
 
-function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, provider }) {
+function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, provider, onRequestClose }) {
   // Compact current-provider detail popover. Shows only the ACTIVE provider's
   // extra details (its windows, reset, balance), plus a way to open the full
   // page. Respects the same divergence/back-end state as the chip.
@@ -1172,6 +1177,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
     onClick: () => {
       haptic('tap')
       openOverview(ctx, scope.fetchProfile, provider, scope.sourceId)
+      if (typeof onRequestClose === 'function') onRequestClose()
     },
     style: { width: '100%', justifyContent: 'center' },
     children: [

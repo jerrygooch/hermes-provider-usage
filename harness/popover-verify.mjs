@@ -22,7 +22,7 @@ fs.mkdirSync(shots, { recursive: true })
 const CHROME = process.env.HARNESS_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
 const PORT = 8932
-const CDP_PORT = 9333
+const CDP_PORT = 9341 // unrelated tools commonly hold 9333 — pick a rarely-used port
 const PANE_HEIGHT = 1500
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -110,14 +110,21 @@ await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` })
 await waitForRender(cdp)
 await sleep(500)
 
-// Prove the chip button is the Popover trigger and clickable.
+// Prove the chip button is wired as the Popover trigger. Radix puts
+// aria-haspopup="dialog" + aria-expanded on the trigger ELEMENT — if a scaffold
+// (e.g. a tooltip wrapper) sits between PopoverTrigger and the button, those
+// props are swallowed and the click opens nothing. That is the v0.4.1 regression.
 const chipInfo = await cdp.eval(`(() => {
   const btn = document.querySelector('#chip-root button')
   if (!btn) return null
   const r = btn.getBoundingClientRect()
-  return { text: btn.textContent.trim(), w: r.width, h: r.height, hasPopoverTrigger: !!btn.closest('[data-slot="popover-trigger"]') }
+  return { text: btn.textContent.trim(), w: r.width, h: r.height, ariaHasPopup: btn.getAttribute('aria-haspopup'), ariaExpanded: btn.getAttribute('aria-expanded') }
 })()`)
 console.log('CHIP BUTTON:', JSON.stringify(chipInfo))
+if (!chipInfo || chipInfo.ariaHasPopup !== 'dialog' || chipInfo.ariaExpanded !== 'false') {
+  console.error('FAIL: chip button is not wired as the popover trigger (aria-haspopup/aria-expanded missing) — trigger props are being swallowed between PopoverTrigger and the button.')
+  process.exitCode = 1
+}
 
 // Click the chip button to open the popover.
 await cdp.eval(`(() => {
@@ -146,6 +153,12 @@ const popGeo = await cdp.eval(`(() => {
 })()`)
 console.log('POPOVER GEO:', JSON.stringify(popGeo))
 
+const pass = Boolean(popoverText && popGeo && popGeo.visible && popGeo.viewAll)
+console.log(pass
+  ? 'POPOVER VERIFY: PASS — chip click opens the popover with "View all providers".'
+  : 'POPOVER VERIFY: FAIL — the chip click did not open a usable popover.')
+if (!pass) process.exitCode = 1
+
 // Hide the page behind the popover so the capture shows the popover alone
 await cdp.eval(`(() => { const p = document.getElementById('pane-root'); if (p) p.style.visibility = 'hidden'; return true })()`)
 await sleep(300)
@@ -159,4 +172,5 @@ cdp.close()
 server.close()
 try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
 console.log('DONE')
-process.exit(0)
+// Exit non-zero when anything failed above (the wiring check or the popover check).
+process.exit(pass && process.exitCode !== 1 ? 0 : 1)

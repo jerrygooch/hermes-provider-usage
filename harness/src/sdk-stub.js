@@ -3,10 +3,12 @@
  *
  * Re-exports the REAL Hermes desktop SDK UI primitives (Button, Badge, Loader,
  * RowButton, StatusDot, icons) straight from hermes-agent's source, so the
- * provider-usage plugin gets faithful native widgets. Only the parts of the SDK
- * that talk to a live app (host atoms/request/events, useQuery data fetching,
- * haptics) and the Tooltip (`Tip`) are replaced by a deterministic fixture
- * double. The plugin→app bridge is a COMPONENT HARNESS, not the running desktop.
+ * provider-usage plugin gets faithful native widgets — including the real
+ * Tooltip (`Tip`). Do not substitute Tip: a prop-forwarding double once masked a
+ * broken PopoverTrigger→Tip→Button nesting (the chip popover never opened in the
+ * real app). The parts that talk to a live app (host atoms/request/events,
+ * useQuery data fetching, haptics) stay deterministic fixture doubles. The
+ * plugin→app bridge is a COMPONENT HARNESS, not the running desktop.
  *
  * Fault model (faithful to the plugin's assumptions):
  *  - host.state.* atoms are READONLY to the plugin but we keep them observable
@@ -25,12 +27,13 @@ import { Loader } from '@/components/ui/loader'
 import { RowButton } from '@/components/ui/row-button'
 import { StatusDot } from '@/components/status-dot'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tip } from '@/components/ui/tooltip'
 import * as icons from '@/lib/icons'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
 // Real SDK UI primitives, re-exported so the plugin imports them faithfully.
-export { Button, Badge, Loader, RowButton, StatusDot, icons, Popover, PopoverContent, PopoverTrigger }
+export { Button, Badge, Loader, RowButton, StatusDot, icons, Popover, PopoverContent, PopoverTrigger, Tip }
 export const ROUTES_AREA = 'routes'
 export const SIDEBAR_NAV_AREA = 'sidebar-nav'
 export const PALETTE_AREA = 'palette'
@@ -256,23 +259,12 @@ export const useMutation = () => [{}, {}]
 export const useQueryClient = () => ({})
 export const __QUERY_CACHE_RESET__ = () => queryCache.clear()
 
-// ---- Tip: faithful tooltip scaffold (label as accessible title) ----
-export function Tip({ label, children, ...rest }) {
-  return jsx(
-    'span',
-    {
-      title: label,
-      'aria-label': label,
-      'data-fake-tip': 'stubbed-tooltip',
-      style: { display: 'inline-flex', maxWidth: '100%' },
-      ...rest,
-      children
-    }
-  )
-}
+// ---- Tip: the REAL component (imported above), deliberately not stubbed. ----
+// The old prop-forwarding double sent trigger props to a DOM node, which hid a
+// real-app regression where Tip swallowed PopoverTrigger's wiring.
 
 // Test-only export to confirm the harness wired the REAL components, not stubs.
 export const __HARNESS_SDK__ = {
-  componentsAreReal: ![Button, Badge, Loader, RowButton, StatusDot].includes(undefined) && typeof icons.RefreshCw === 'function',
+  componentsAreReal: ![Button, Badge, Loader, RowButton, StatusDot].includes(undefined) && typeof Tip === 'function' && typeof icons.RefreshCw === 'function',
   primitives: { button: Boolean(Button), badge: Boolean(Badge), loader: Boolean(Loader), rowButton: Boolean(RowButton), statusDot: Boolean(StatusDot), icons: Object.keys(icons).length }
 }
