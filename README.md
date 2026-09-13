@@ -37,6 +37,7 @@ A Spark session is a useful example. Spark can have separate 5-hour and weekly l
 | DeepSeek | API balance in the currency returned by DeepSeek |
 | OpenRouter | Remaining API credit balance |
 | SuperGrok / xAI OAuth | SuperGrok subscription quota and reset data returned by the Grok billing endpoint |
+| Ollama Cloud | Subscription windows (5-hour, weekly, and monthly credit usage, whichever the account reports) and per-model request counts |
 | Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it |
 
 OpenCode appears as one provider family in the popover/page, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.

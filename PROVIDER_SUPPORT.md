@@ -12,6 +12,7 @@ Provider Usage answers one practical question: **what shared account resource go
 | DeepSeek | API balance | Tested | Currency is displayed exactly as DeepSeek returns it. CNY is never relabeled as USD. |
 | OpenRouter | Remaining API credits | Tested | Uses the credential already configured in Hermes. |
 | SuperGrok / xAI OAuth | Subscription quota and reset data | Experimental | Uses an undocumented Grok billing endpoint that may change. The response does not expose a trustworthy plan tier, so the plugin labels the product **SuperGrok** and does not infer a higher tier. |
+| Ollama Cloud | Session, weekly, and monthly usage windows plus per-model request counts | Experimental | Uses an account usage endpoint that is community-known rather than officially documented, so responses may change. Plans differ: newer plans report monthly credit usage; older ones report 5-hour and weekly windows. Reset times appear only when the account reports them; otherwise they stay marked unavailable. |
 | Nous Portal | Portal credit snapshot | Experimental | Availability depends on the installed Hermes version and the account capabilities exposed by its runtime. |
 | Anthropic, Google, Azure, and local providers | Honest capability state | Planned | A provider is added only when there is a useful authenticated account-level source. Until then, the plugin reports the limitation instead of guessing. |
 

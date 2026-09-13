@@ -108,6 +108,28 @@ const opencodeZen = {
   details: ['API access authenticated; balance unavailable']
 }
 
+const ollamaCloud = {
+  id: 'ollama-cloud',
+  label: 'Ollama Cloud',
+  available: true,
+  limits: [{ id: 'default', label: 'Ollama Cloud', windows: [window('Monthly', 100)] }],
+  balances: [],
+  details: ['glm-5.3-flash: 2 requests', 'Spend in the last 4 weeks: $0.00']
+}
+
+const ollamaCloudLegacy = {
+  ...ollamaCloud,
+  limits: [{ id: 'default', label: 'Ollama Cloud', windows: [window('5-hour', 98), window('Weekly', 84), window('Monthly', 62)] }]
+}
+
+const ollamaCloudEmpty = {
+  ...ollamaCloud,
+  available: false,
+  limits: [],
+  details: ['Reset times are not published on this endpoint; they stay unavailable rather than estimated.'],
+  unavailable_reason: 'Ollama Cloud returned no usage windows for this account.'
+}
+
 const cases = [
   ['Pro GPT-5.6 uses shared weekly meter', compactFundingSummary(codex, 'gpt-5.6-sol'), 'wk 98%'],
   ['Pro GPT-6 Astra uses shared weekly meter', compactFundingSummary(codex, 'gpt-6-astra'), 'wk 98%'],
@@ -116,7 +138,10 @@ const cases = [
   ['DeepSeek uses its API balance', compactFundingSummary(deepseek, 'deepseek-chat'), '$36.29'],
   ['Single subscription window stays concise', compactFundingSummary(xai, 'grok-4.6'), '62% left'],
   ['OpenCode Go shows every subscription window', compactFundingSummary(opencodeGo, 'mimo-v2.5'), '5h 100% · wk 100% · mo 85%'],
-  ['OpenCode Zen never invents a credit balance', compactFundingSummary(opencodeZen, 'kimi-k2.5'), 'Zen balance unavailable']
+  ['OpenCode Zen never invents a credit balance', compactFundingSummary(opencodeZen, 'kimi-k2.5'), 'Zen balance unavailable'],
+  ['Ollama Cloud monthly credits stay visible in the chip', compactFundingSummary(ollamaCloud, 'glm-5.3-flash'), 'mo 100%'],
+  ['Ollama Cloud legacy plans keep every reported window', compactFundingSummary(ollamaCloudLegacy, 'glm-5.3-flash'), '5h 98% · wk 84% · mo 62%'],
+  ['Ollama Cloud does not invent windows for an empty account', compactFundingSummary(ollamaCloudEmpty, 'glm-5.3-flash'), 'limited data']
 ]
 
 const exhausted = structuredClone(codex)
@@ -139,6 +164,7 @@ const mergedOpenCode = mergeOpenCodeRows([codex, opencodeGo, opencodeZen], 'open
 const mergedRows = mergedOpenCode.filter(row => row.id === 'opencode-go' || row.id === 'opencode-zen')
 if (mergedRows.length !== 1 || mergedRows[0].products.length !== 2) throw new Error('OpenCode product grouping failed')
 if (statusFundingSummary(opencodeGo, 'mimo-v2.5') !== '5h 100% · wk 100%') throw new Error('OpenCode status summary should omit the monthly window')
+if (statusFundingSummary(ollamaCloud, 'glm-5.3-flash') !== 'mo 100%') throw new Error('Ollama Cloud status summary must keep the monthly window')
 if (!compactFundingSummary(opencodeGo, 'mimo-v2.5').includes('mo 85%')) throw new Error('OpenCode detailed summary must retain the monthly window')
 const aliceKey = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'local::Alice')
 const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'local::ChaosForge')

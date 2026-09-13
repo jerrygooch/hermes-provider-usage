@@ -44,6 +44,7 @@ function normaliseProvider(value) {
   if (text === 'supergrok' || text === 'grok-oauth') return 'xai-oauth'
   if (text === 'claude') return 'anthropic'
   if (text === 'nous-portal') return 'nous'
+  if (text === 'ollama-cloud' || text === 'ollama_cloud') return 'ollama-cloud'
   if (text === 'go' || text === 'opencode_go' || text === 'opencode-go-sub') return 'opencode-go'
   if (text === 'opencode' || text === 'zen' || text === 'opencode_zen') return 'opencode-zen'
   return text
@@ -374,6 +375,7 @@ function compactProviderLabel(row) {
     deepseek: 'DeepSeek',
     'opencode-go': 'OpenCode',
     'opencode-zen': 'OpenCode',
+    'ollama-cloud': 'Ollama',
     anthropic: 'Claude',
     nous: 'Nous'
   }

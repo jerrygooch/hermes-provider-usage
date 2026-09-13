@@ -31,8 +31,9 @@ _PROVIDER_LABELS = {
     "openai-api": "OpenAI API",
     "opencode-go": "OpenCode",
     "opencode-zen": "OpenCode",
+    "ollama-cloud": "Ollama Cloud",
 }
-_SUPPORTED = {"openai-codex", "openrouter", "deepseek", "xai-oauth", "nous", "anthropic", "opencode-go", "opencode-zen"}
+_SUPPORTED = {"openai-codex", "openrouter", "deepseek", "xai-oauth", "nous", "anthropic", "opencode-go", "opencode-zen", "ollama-cloud"}
 _ALIASES = {
     "codex": "openai-codex",
     "openai-codex": "openai-codex",
@@ -53,6 +54,8 @@ _ALIASES = {
     "opencode_zen": "opencode-zen",
     "opencode": "opencode-zen",
     "zen": "opencode-zen",
+    "ollama-cloud": "ollama-cloud",
+    "ollama_cloud": "ollama-cloud",
     "auto": "",
 }
 
@@ -122,7 +125,7 @@ def _base(provider: str, *, title: str, source: str, plan: Optional[str] = None)
         "label": _PROVIDER_LABELS.get(provider, provider),
         "available": False,
         "configured": True,
-        "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go"} else "balance",
+        "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go", "ollama-cloud"} else "balance",
         "source": source,
         "fetched_at": _now(),
         "title": title,
@@ -729,6 +732,97 @@ def _fetch_nous() -> dict[str, Any]:
     return _serialize_snapshot(snapshot)
 
 
+def _ollama_usage_row(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an ollama.com/api/usage payload.
+
+    The endpoint is community-known rather than officially documented, and the
+    account decides which windows exist: newer plans report only ``monthly``
+    credit usage, older keys also expose ``session``/``weekly``. Usage arrives
+    as a 0-1 fraction; it is shown as returned and nothing is estimated. Reset
+    times are not published, so they stay unavailable instead of guessed.
+    """
+    limits_block = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    windows: list[dict[str, Any]] = []
+    reached = False
+    for key, label in (("session", "5-hour"), ("weekly", "Weekly"), ("monthly", "Monthly")):
+        entry = limits_block.get(key)
+        if not isinstance(entry, dict):
+            continue
+        fraction = _number(entry.get("usage"))
+        if fraction is None:
+            continue
+        used = fraction * 100.0 if 0.0 <= fraction <= 1.0 else fraction
+        if used >= 100.0:
+            reached = True
+        windows.append(_window(label, used))
+
+    row = _base("ollama-cloud", title="Ollama Cloud", source="usage_api")
+    if windows:
+        row["limits"] = [{
+            "id": "default",
+            "label": "Ollama Cloud",
+            "windows": windows,
+            "allowed": not reached,
+            "limit_reached": reached,
+        }]
+
+    models = None
+    for key in ("monthly", "weekly", "session"):
+        entry = limits_block.get(key)
+        if isinstance(entry, dict) and entry.get("models"):
+            models = entry.get("models")
+            break
+    if isinstance(models, dict):
+        entries = [
+            dict(value, name=value.get("name") or name) if isinstance(value, dict) else {"name": name, "request_count": value}
+            for name, value in models.items()
+        ]
+    elif isinstance(models, list):
+        entries = [item for item in models if isinstance(item, dict)]
+    else:
+        entries = []
+    for item in entries[:6]:
+        name = str(item.get("name") or "").strip()
+        count = _number(item.get("request_count"))
+        if name and count is not None:
+            count_int = int(count)
+            row["details"].append(f"{name}: {count_int} request{'s' if count_int != 1 else ''}")
+
+    activity = payload.get("activity") if isinstance(payload.get("activity"), dict) else {}
+    cost = str(activity.get("cost") or "").strip()
+    if cost:
+        try:
+            cost_text = f"${float(cost):.2f}"
+        except ValueError:
+            cost_text = cost
+        period = activity.get("period") if isinstance(activity.get("period"), dict) else {}
+        period_text = str(period.get("type") or "").replace("_", " ").strip()
+        row["details"].append(f"Spend in the {period_text or 'recent period'}: {cost_text}")
+
+    row["details"].append("Reset times are not published on this endpoint; they stay unavailable rather than estimated.")
+    row["available"] = bool(windows)
+    if not row["available"]:
+        row["unavailable_reason"] = "Ollama Cloud returned no usage windows for this account."
+    return row
+
+
+def _fetch_ollama_cloud() -> dict[str, Any]:
+    runtime = _runtime("ollama-cloud")
+    token = str(runtime.get("api_key") or "").strip()
+    if not token:
+        raise RuntimeError("no Ollama Cloud credentials")
+    base_url = str(runtime.get("base_url") or "https://ollama.com/v1").rstrip("/")
+    if base_url.endswith("/v1"):
+        base_url = base_url[: -len("/v1")]
+    with httpx.Client(timeout=15.0) as client:
+        response = client.get(
+            f"{base_url}/api/usage",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        )
+        response.raise_for_status()
+    return _ollama_usage_row(response.json() or {})
+
+
 def _fetch_provider(provider: str) -> dict[str, Any]:
     if provider == "openai-codex":
         return _fetch_codex()
@@ -740,6 +834,8 @@ def _fetch_provider(provider: str) -> dict[str, Any]:
         return _fetch_opencode_go()
     if provider == "opencode-zen":
         return _fetch_opencode_zen()
+    if provider == "ollama-cloud":
+        return _fetch_ollama_cloud()
     if provider == "xai-oauth":
         return _fetch_xai()
     if provider == "nous":
@@ -804,6 +900,18 @@ def _has_local_credentials(provider: str) -> bool:
                 return True
             if isinstance(value, dict) and any(str(item or "").strip() for item in value.values()):
                 return True
+        # Credentials can also arrive from environment/config alone, with no
+        # auth entry — e.g. Ollama Cloud's OLLAMA_API_KEY. A resolvable runtime
+        # key counts as local credentials for inventory purposes.
+        try:
+            from hermes_cli.runtime_provider import resolve_runtime_provider
+
+            runtime = resolve_runtime_provider(requested=provider) or {}
+            resolved = str(runtime.get("provider") or "").strip()
+            if resolved and resolved != "custom" and str(runtime.get("api_key") or "").strip():
+                return True
+        except Exception:
+            pass
     except Exception:
         return False
     return False
@@ -850,14 +958,14 @@ def _inventory() -> list[dict[str, Any]]:
             "label": label,
             "configured": True,
             "supported": provider in _SUPPORTED,
-            "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go"} else ("balance" if provider in {"openrouter", "deepseek", "nous", "opencode-zen"} else "unsupported"),
+            "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go", "ollama-cloud"} else ("balance" if provider in {"openrouter", "deepseek", "nous", "opencode-zen"} else "unsupported"),
         })
     return rows
 
 
 @router.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "plugin": "provider-usage", "version": "0.4.1"}
+    return {"ok": True, "plugin": "provider-usage", "version": "0.5.0"}
 
 
 @router.post("/overview")
