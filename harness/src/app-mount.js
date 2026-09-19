@@ -10,6 +10,8 @@ import { createRoot } from 'react-dom/client'
 import { useEffect, useRef, useState } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
+import { applyHarnessTheme } from './harness-theme.js'
+
 function currentFixture() {
   return window.__FIXTURE__ || { overview: null, host: {} }
 }
@@ -21,6 +23,12 @@ function bodyText() {
 // ctx.register, then render their `render()` functions, exactly as the app's
 // pane shell would.
 export function mountPlugin(pluginModule) {
+  // Optional themed rendering (capture flag `--theme <name> [--mode light|dark]`):
+  // apply the real desktop theme to <html> before anything mounts, so the
+  // stylesheet derives every token exactly as the running app does.
+  if (window.__HARNESS_THEME__) {
+    window.__CAPTURE__ = Object.assign(window.__CAPTURE__ || {}, { theme: applyHarnessTheme(window.__HARNESS_THEME__) })
+  }
   const contributions = []
   const restCalls = []
   // Scriptable rest door for lifecycle scenarios: 'ok' resolves the fixture

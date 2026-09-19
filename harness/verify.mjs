@@ -104,8 +104,11 @@ for (const label of labels) {
   if (!okName) problems.push(`registered name ≠ ${expected.registeredName}`)
   if (missingNeedles.length) problems.push(`missing text: ${missingNeedles.join(', ')}`)
   if (badChip) problems.push(`chip missing ${expected.chipNeedle}`)
-  if (accent !== '#0053fd') problems.push(`accent token ${accent} ≠ #0053fd`)
-  if (destructive !== '#cf2d56') problems.push(`destructive token ${destructive} ≠ #cf2d56`)
+  // A themed capture (--theme) paints the real desktop theme's tokens instead
+  // of the stylesheet defaults; those resolved values are the theme's, not the
+  // default #0053fd/#cf2d56 pair.
+  if (!e.theme && accent !== '#0053fd') problems.push(`accent token ${accent} ≠ #0053fd`)
+  if (!e.theme && destructive !== '#cf2d56') problems.push(`destructive token ${destructive} ≠ #cf2d56`)
   if (!e.paneRect || e.paneRect.width < 1) problems.push('pane has no geometry')
 
   // Toolbar honesty: positive dims inside the 230px cap + the governing funding

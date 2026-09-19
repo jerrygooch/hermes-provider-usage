@@ -52,6 +52,11 @@ const fixtures = fs
 const requestedFixture = arg('--fixture', '')
 const requestedWidth = arg('--width', '')
 const clean = process.argv.includes('--clean') // preview mode: no harness caption, no chip column
+const themeName = arg('--theme', '')
+const themeMode = arg('--mode', 'dark') === 'light' ? 'light' : 'dark'
+// `--theme <builtin>` renders the real desktop theme (see harness-theme.js);
+// without it, captures use the stylesheet's own default tokens.
+const themeSpec = themeName ? { name: themeName, mode: themeMode } : null
 const WIDTHS = requestedWidth ? [Number(requestedWidth)] : [420, 760]
 const PANE_HEIGHT = 1500
 
@@ -143,7 +148,7 @@ try {
     for (const width of WIDTHS) {
       const label = `${fixture}_w${width}`
       // Rebuild the HTML each time with this width so the pane container reflects width.
-      const html = htmlPage({ fixture, width, fixtureData, hostCfg, clean })
+      const html = htmlPage({ fixture, width, fixtureData, hostCfg, clean, themeSpec })
       fs.writeFileSync(path.join(dist, 'index.html'), html)
       const url = `http://127.0.0.1:${PORT}/index.html`
 
@@ -168,7 +173,7 @@ try {
       const geometrySnap = await cdp
         .eval('window.__GEOMETRY__ ? JSON.stringify(window.__GEOMETRY__) : null')
         .catch(() => null)
-      const final = { registered: meta.registered, paneRect: meta.paneRect, chipRect: meta.chipRect, clean }
+      const final = { registered: meta.registered, paneRect: meta.paneRect, chipRect: meta.chipRect, clean, theme: themeSpec }
       final.geometry = geometrySnap ? JSON.parse(geometrySnap) : null
       final.text = meta.text
       final.chipText = await cdp
@@ -195,7 +200,7 @@ try {
 fs.writeFileSync(path.join(shots, 'geometry.json'), JSON.stringify(geometry, null, 2))
 console.log(`\nGeometry evidence → ${path.join(shots, 'geometry.json')}`)
 
-function htmlPage({ fixture, width, fixtureData, hostCfg, clean = false }) {
+function htmlPage({ fixture, width, fixtureData, hostCfg, clean = false, themeSpec = null }) {
   return `<!doctype html>
 <html lang="en" data-harness="1">
   <head>
@@ -213,6 +218,7 @@ function htmlPage({ fixture, width, fixtureData, hostCfg, clean = false }) {
     </style>
     <script>
       window.__FIXTURE__ = { overview: ${JSON.stringify(fixtureData)}, host: ${JSON.stringify(hostCfg)} };
+      window.__HARNESS_THEME__ = ${JSON.stringify(themeSpec)};
       window.__CAPTURE__ = { fixture: ${JSON.stringify(fixture)}, paneWidth: ${width}, paneHeight: ${PANE_HEIGHT}, chipWidth: 320, body: true };
     </script>
   </head>

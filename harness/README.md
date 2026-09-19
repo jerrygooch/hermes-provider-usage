@@ -134,16 +134,23 @@ node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
 
 The two images in the repository README are regenerated from the
 `preview-showcase` fixture with the harness caption and chip column suppressed
-(`--clean`), then cropped to their content bounds by `harness/export-previews.py`
-(Pillow required for the crop step):
+(`--clean`) and the default desktop theme applied (`--theme nous --mode dark`),
+then cropped to their content bounds by `harness/export-previews.py` (Pillow
+required for the crop step):
 
 ```bash
 node harness/build.mjs
-node harness/capture.mjs --fixture preview-showcase --width 1400 --clean
+node harness/capture.mjs --fixture preview-showcase --width 1400 --clean --theme nous --mode dark
 node harness/verify.mjs
-node harness/popover-verify.mjs --fixture preview-showcase
+node harness/popover-verify.mjs --fixture preview-showcase --theme nous --mode dark
 python harness/export-previews.py
 ```
+
+`--theme <name>` (`--mode light|dark`) renders a real built-in desktop theme:
+`harness-theme.js` mirrors the app's `applyTheme` (brand seeds, per-appearance
+mix knobs, `.dark` class) against the real preset palettes, and the stylesheet
+derives every `--ui-*` / `--dt-*` token the same way the running app does. The
+committed previews use the desktop's default theme, **nous**, in dark mode.
 
 `harness/dist/app.js`, `harness/dist/*.html`, and `harness/dist/shots/*` are
 git-ignored build/capture outputs — regenerate, don't commit them.
@@ -168,8 +175,9 @@ reference-identity accidents.
   chrome and a status-bar placement for the chip. Nothing here proves the full
   packaged-app integration (Electron shell, real gateway socket, real
   per-profile backend routing) — that remains a live-app acceptance step.
-- Default SDK theme (light). It reflects the SDK's shipped default accent/palette,
-  **not** whichever skin the user's live app is currently using.
+- Captures render the stylesheet's default tokens unless `--theme <name> [--mode
+  light|dark]` applies a built-in desktop theme (mirrored by `harness-theme.js`);
+  a user's own custom skin is not rendered.
 - `Tip` tooltips are stubbed (resting-state invisible); hover-popovers are not
   captured.
 - The fixture data is synthetic sample data, clearly labeled on each page.

@@ -35,16 +35,26 @@ const { CDP, discoverTarget } = await import(
 )
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' }
+const sdkCss = path.join(__dirname, 'static', 'hermes-sdk.css')
+if (!fs.existsSync(sdkCss)) throw new Error('Real SDK CSS missing at harness/static/hermes-sdk.css')
 const server = http.createServer((req, res) => {
-  const urlPath = (req.url || '/').split('?')[0]
-  const file = urlPath === '/' ? path.join(dist, 'index.html') : path.join(dist, urlPath.replace(/^\//, ''))
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end('not found'); return }
+  const urlPath = decodeURIComponent((req.url || '/').split('?')[0])
+  // Serve static/ (the real SDK stylesheet) and dist/ (bundle + generated
+  // pages). The popover page MUST get the real stylesheet — without it every
+  // var()-based token falls back and the capture renders unstyled.
+  const base = urlPath.startsWith('/static/') ? path.join(__dirname, 'static') : dist
+  const rel = urlPath.replace(/^\/static\//, '').replace(/^\/+/, '')
+  const file = path.join(base, rel)
+  if (!file.startsWith(base) && !(base === dist && file.startsWith(dist))) {
+    res.writeHead(403); res.end('forbidden'); return
+  }
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); res.end('not found'); return }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' })
-  res.end(fs.readFileSync(file))
+  fs.createReadStream(file).pipe(res)
 })
 await new Promise(r => server.listen(PORT, '127.0.0.1', r))
 
-function htmlPage({ fixture, width, fixtureData, hostCfg }) {
+function htmlPage({ fixture, width, fixtureData, hostCfg, themeSpec = null }) {
   return `<!doctype html>
 <html lang="en" data-harness="1">
   <head>
@@ -59,6 +69,7 @@ function htmlPage({ fixture, width, fixtureData, hostCfg }) {
     </style>
     <script>
       window.__FIXTURE__ = { overview: ${JSON.stringify(fixtureData)}, host: ${JSON.stringify(hostCfg)} };
+      window.__HARNESS_THEME__ = ${JSON.stringify(themeSpec)};
       window.__CAPTURE__ = { fixture: ${JSON.stringify(fixture)}, paneWidth: ${width}, paneHeight: ${PANE_HEIGHT}, chipWidth: 320, body: true };
     </script>
   </head>
@@ -101,6 +112,9 @@ const waitUntil = async (cdp, expr, timeoutMs = 15000) => {
 
 const fixture = arg('--fixture', 'compact-5h-wk')
 const width = Number(arg('--width', '760'))
+const themeName = arg('--theme', '')
+const themeMode = arg('--mode', 'dark') === 'light' ? 'light' : 'dark'
+const themeSpec = themeName ? { name: themeName, mode: themeMode } : null
 const fixtureData = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', `${fixture}.json`), 'utf8'))
 const hostCfg = { model: fixtureData.active.model, sessionId: 'sess-harness-1', profile: 'default', gateway: 'open' }
 
@@ -110,7 +124,7 @@ catch { cdp = await CDP.connect({ port: CDP_PORT, timeoutMs: 15000 }) }
 await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 1600, deviceScaleFactor: 1, mobile: false })
 await cdp.send('Page.enable')
 
-fs.writeFileSync(path.join(dist, 'index.html'), htmlPage({ fixture, width, fixtureData, hostCfg }))
+fs.writeFileSync(path.join(dist, 'index.html'), htmlPage({ fixture, width, fixtureData, hostCfg, themeSpec }))
 await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` })
 await waitForRender(cdp)
 await sleep(500)
@@ -123,11 +137,19 @@ const chipInfo = await cdp.eval(`(() => {
   const btn = document.querySelector('#chip-root button')
   if (!btn) return null
   const r = btn.getBoundingClientRect()
-  return { text: btn.textContent.trim(), w: r.width, h: r.height, ariaHasPopup: btn.getAttribute('aria-haspopup'), ariaExpanded: btn.getAttribute('aria-expanded') }
+  return { text: btn.textContent.trim(), w: r.width, h: r.height, ariaHasPopup: btn.getAttribute('aria-haspopup'), ariaExpanded: btn.getAttribute('aria-expanded'), uiBgEditor: getComputedStyle(document.documentElement).getPropertyValue('--ui-bg-editor').trim() }
 })()`)
 console.log('CHIP BUTTON:', JSON.stringify(chipInfo))
 if (!chipInfo || chipInfo.ariaHasPopup !== 'dialog' || chipInfo.ariaExpanded !== 'false') {
   console.error('FAIL: chip button is not wired as the popover trigger (aria-haspopup/aria-expanded missing) — trigger props are being swallowed between PopoverTrigger and the button.')
+  process.exitCode = 1
+}
+// The page must load the REAL compiled SDK stylesheet: without it every
+// var()-based token falls back and the capture renders unstyled (this is not
+// hypothetical — a server without /static/ handling produced token-less
+// popover captures).
+if (chipInfo && !chipInfo.uiBgEditor) {
+  console.error('FAIL: the SDK stylesheet did not load (--ui-bg-editor unresolved) — the harness server must serve /static/hermes-sdk.css.')
   process.exitCode = 1
 }
 

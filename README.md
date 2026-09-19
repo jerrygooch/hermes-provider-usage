@@ -6,7 +6,7 @@ The plugin reports shared provider limits, not usage for one chat. If five sessi
 
 ## Interface previews
 
-These images use sample data, rendered from the plugin's actual components (not hand-written mockups): a real SDK-styled full page and the toolbar popover. The accent follows the active Hermes theme. No real account values appear. See `harness/` for the reproducible capture.
+These images use sample data, rendered from the plugin's actual components (not hand-written mockups) with the built-in **Nous** desktop theme (dark mode): a real SDK-styled full page and the toolbar popover. No real account values appear. See `harness/` for the reproducible capture.
 
 ![Provider Usage full page (sample data)](assets/provider-usage-page.png)
 
