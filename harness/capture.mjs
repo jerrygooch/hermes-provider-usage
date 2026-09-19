@@ -51,6 +51,7 @@ const fixtures = fs
 
 const requestedFixture = arg('--fixture', '')
 const requestedWidth = arg('--width', '')
+const clean = process.argv.includes('--clean') // preview mode: no harness caption, no chip column
 const WIDTHS = requestedWidth ? [Number(requestedWidth)] : [420, 760]
 const PANE_HEIGHT = 1500
 
@@ -142,7 +143,7 @@ try {
     for (const width of WIDTHS) {
       const label = `${fixture}_w${width}`
       // Rebuild the HTML each time with this width so the pane container reflects width.
-      const html = htmlPage({ fixture, width, fixtureData, hostCfg })
+      const html = htmlPage({ fixture, width, fixtureData, hostCfg, clean })
       fs.writeFileSync(path.join(dist, 'index.html'), html)
       const url = `http://127.0.0.1:${PORT}/index.html`
 
@@ -167,7 +168,7 @@ try {
       const geometrySnap = await cdp
         .eval('window.__GEOMETRY__ ? JSON.stringify(window.__GEOMETRY__) : null')
         .catch(() => null)
-      const final = { registered: meta.registered, paneRect: meta.paneRect, chipRect: meta.chipRect }
+      const final = { registered: meta.registered, paneRect: meta.paneRect, chipRect: meta.chipRect, clean }
       final.geometry = geometrySnap ? JSON.parse(geometrySnap) : null
       final.text = meta.text
       final.chipText = await cdp
@@ -194,7 +195,7 @@ try {
 fs.writeFileSync(path.join(shots, 'geometry.json'), JSON.stringify(geometry, null, 2))
 console.log(`\nGeometry evidence → ${path.join(shots, 'geometry.json')}`)
 
-function htmlPage({ fixture, width, fixtureData, hostCfg }) {
+function htmlPage({ fixture, width, fixtureData, hostCfg, clean = false }) {
   return `<!doctype html>
 <html lang="en" data-harness="1">
   <head>
@@ -206,6 +207,7 @@ function htmlPage({ fixture, width, fixtureData, hostCfg }) {
       * { box-sizing: border-box; }
       #panel { position: relative; background: var(--ui-bg-editor, #f8faff); }
       #chip-root { position: absolute; top: 10px; left: ${width + 20}px; width: 320px; z-index: 5; border: 1px dashed rgba(128,128,128,.4); padding: 4px; }
+      ${clean ? '#chip-root { display: none; }' : ''}
       #pane-root { width: ${width}px; height: ${PANE_HEIGHT}px; }
       .harness-note { position: absolute; top: 10px; left: 10px; font: 11px/1.4 system-ui; color: #888; z-index: 9; }
     </style>
@@ -215,7 +217,7 @@ function htmlPage({ fixture, width, fixtureData, hostCfg }) {
     </script>
   </head>
   <body>
-    <div class="harness-note">Provider Usage harness · fixture ${fixture} · pane ${width}px · component render (real plugin.js + real SDK primitives)</div>
+    <div class="harness-note"${clean ? ' hidden' : ''}>Provider Usage harness · fixture ${fixture} · pane ${width}px · component render (real plugin.js + real SDK primitives)</div>
     <div id="panel">
       <div id="chip-root"></div>
       <div id="pane-root"></div>

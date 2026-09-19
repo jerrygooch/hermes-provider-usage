@@ -118,6 +118,7 @@ door over CDP:
 | `compact-5h-wk` | subscription with **5-hour + 7-day** windows → compact funding `5h 62% · wk 84%`, two meter bars |
 | `credit-balance` | **credit-balance** provider → prominent `$43.50`, `used/granted` break-down, `CreditCard` chip icon |
 | `exhausted-monthly` | subscription with a **0% monthly window** → red destructive `mo 0%`, alongside a live 5-hour window |
+| `preview-showcase` | the public README previews: Codex (Pro) active with DeepSeek, OpenCode, SuperGrok, and Ollama Cloud reporting, plus one limited provider |
 
 Wide (760) renders the multi-window meters in the plugin's `minmax(145px,1fr)`
 grid; narrow (420) stacks them — the layout is the plugin's own.
@@ -127,6 +128,21 @@ grid; narrow (420) stacks them — the layout is the plugin's own.
 ```bash
 npm ci
 node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
+```
+
+## Capturing the README previews
+
+The two images in the repository README are regenerated from the
+`preview-showcase` fixture with the harness caption and chip column suppressed
+(`--clean`), then cropped to their content bounds by `harness/export-previews.py`
+(Pillow required for the crop step):
+
+```bash
+node harness/build.mjs
+node harness/capture.mjs --fixture preview-showcase --width 1400 --clean
+node harness/verify.mjs
+node harness/popover-verify.mjs --fixture preview-showcase
+python harness/export-previews.py
 ```
 
 `harness/dist/app.js`, `harness/dist/*.html`, and `harness/dist/shots/*` are

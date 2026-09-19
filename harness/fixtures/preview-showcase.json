@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "fetched_at": "2026-09-13T12:00:00Z",
+  "active": { "provider": "openai-codex", "model": "gpt-5.6-codex" },
+  "default_provider": "openai-codex",
+  "providers": [
+    {
+      "id": "openai-codex",
+      "label": "OpenAI Codex",
+      "available": true,
+      "plan": "Pro",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "Codex",
+          "windows": [
+            { "label": "5-hour", "remaining_percent": 62, "reset_at": "2026-09-13T18:30:00Z" },
+            { "label": "Weekly", "remaining_percent": 84, "reset_at": "2026-09-16T17:00:00Z" }
+          ]
+        }
+      ],
+      "balances": [
+        { "label": "Extra usage balance", "amount": 12.34, "currency": "USD" }
+      ],
+      "details": []
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "available": true,
+      "plan": "API credits",
+      "capability": "balance",
+      "limits": [],
+      "balances": [
+        { "label": "Total balance", "amount": 8.72, "currency": "USD", "granted": 10, "used": 1.28, "total": 10 }
+      ],
+      "details": []
+    },
+    {
+      "id": "opencode-go",
+      "label": "OpenCode",
+      "available": true,
+      "plan": "Go subscription",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "go",
+          "label": "Go subscription",
+          "windows": [
+            { "label": "5-hour", "remaining_percent": 92 },
+            { "label": "Weekly", "remaining_percent": 74 },
+            { "label": "Monthly", "remaining_percent": 63 }
+          ]
+        }
+      ],
+      "balances": [],
+      "products": [{ "id": "go", "label": "Go subscription", "kind": "subscription", "available": true }],
+      "details": []
+    },
+    {
+      "id": "opencode-zen",
+      "label": "OpenCode",
+      "available": true,
+      "plan": "Zen API credits",
+      "capability": "balance",
+      "limits": [],
+      "balances": [],
+      "products": [
+        { "id": "zen", "label": "Zen API credits", "kind": "balance", "available": false, "unavailable_reason": "Wallet balance is not exposed to API keys." }
+      ],
+      "details": ["API access authenticated; balance unavailable"]
+    },
+    {
+      "id": "ollama-cloud",
+      "label": "Ollama Cloud",
+      "available": true,
+      "plan": null,
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "Ollama Cloud",
+          "windows": [{ "label": "Monthly", "remaining_percent": 72 }]
+        }
+      ],
+      "balances": [],
+      "details": ["qwen3-coder:480b: 18 requests", "Spend in the last 4 weeks: $1.84"]
+    },
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "SuperGrok",
+          "windows": [{ "label": "Subscription window", "remaining_percent": 58, "reset_at": "2026-09-14T18:00:00Z" }]
+        }
+      ],
+      "balances": [],
+      "details": []
+    },
+    {
+      "id": "nous",
+      "label": "Nous Portal",
+      "available": false,
+      "unavailable_reason": "No Portal OAuth session on this profile."
+    }
+  ]
+}

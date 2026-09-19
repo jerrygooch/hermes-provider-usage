@@ -48,6 +48,12 @@ const EXPECT = {
     needles: ['mo 0%', 'Monthly window', '0% left', 'SuperGrok'],
     chipNeedle: 'Grok',
     chipGovern: 'mo 0%'
+  },
+  'preview-showcase': {
+    registeredName: 'Provider Usage',
+    needles: ['OpenAI Codex', 'wk 84%', '62% left', 'Ollama Cloud', 'DeepSeek', 'SuperGrok', 'Limited data (1)', 'shared across every Codex session'],
+    chipNeedle: 'Codex',
+    chipGovern: 'wk 84%'
   }
 }
 
@@ -85,10 +91,13 @@ for (const label of labels) {
   if (!expected) continue
   const e = geom[label]
   const problems = []
+  // A --clean capture (README preview mode) hides the chip column on purpose;
+  // its chip assertions are covered by the regular (non-clean) suite runs.
+  const cleanRun = e.clean === true
   const okName = e.registered?.name === expected.registeredName
   const text = (e.text || '') + '\n' + (e.chipText || '')
   const missingNeedles = expected.needles.filter(n => !text.includes(n))
-  const badChip = expected.chipNeedle && !(e.chipText || '').includes(expected.chipNeedle)
+  const badChip = !cleanRun && expected.chipNeedle && !(e.chipText || '').includes(expected.chipNeedle)
   const accent = e.geometry?.resolvedVars?.accent
   const destructive = e.geometry?.resolvedVars?.destructive
 
@@ -100,11 +109,14 @@ for (const label of labels) {
   if (!e.paneRect || e.paneRect.width < 1) problems.push('pane has no geometry')
 
   // Toolbar honesty: positive dims inside the 230px cap + the governing funding
-  // value visible (not ellipsized to nothing).
-  if (e.geometry && e.geometry.chip) chipGeometryOK(e.geometry.chip, label, problems)
-  const governChip = (e.geometry?.chip?.button?.text || e.chipText || '')
-  if (expected.chipGovern && !governChip.includes(expected.chipGovern)) {
-    problems.push(`chip does not show governing value "${expected.chipGovern}"`)
+  // value visible (not ellipsized to nothing). Skipped for --clean preview
+  // captures, where the chip is intentionally not rendered.
+  if (!cleanRun) {
+    if (e.geometry && e.geometry.chip) chipGeometryOK(e.geometry.chip, label, problems)
+    const governChip = (e.geometry?.chip?.button?.text || e.chipText || '')
+    if (expected.chipGovern && !governChip.includes(expected.chipGovern)) {
+      problems.push(`chip does not show governing value "${expected.chipGovern}"`)
+    }
   }
 
   if (problems.length) {

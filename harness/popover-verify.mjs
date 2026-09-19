@@ -24,6 +24,10 @@ const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(
 const PORT = 8932
 const CDP_PORT = 9341 // unrelated tools commonly hold 9333 — pick a rarely-used port
 const PANE_HEIGHT = 1500
+function arg(name, fallback) {
+  const i = process.argv.indexOf(name)
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const { CDP, discoverTarget } = await import(
@@ -95,7 +99,8 @@ const waitUntil = async (cdp, expr, timeoutMs = 15000) => {
   }
 }
 
-const fixture = 'compact-5h-wk'
+const fixture = arg('--fixture', 'compact-5h-wk')
+const width = Number(arg('--width', '760'))
 const fixtureData = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', `${fixture}.json`), 'utf8'))
 const hostCfg = { model: fixtureData.active.model, sessionId: 'sess-harness-1', profile: 'default', gateway: 'open' }
 
@@ -105,7 +110,7 @@ catch { cdp = await CDP.connect({ port: CDP_PORT, timeoutMs: 15000 }) }
 await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 1600, deviceScaleFactor: 1, mobile: false })
 await cdp.send('Page.enable')
 
-fs.writeFileSync(path.join(dist, 'index.html'), htmlPage({ fixture, width: 760, fixtureData, hostCfg }))
+fs.writeFileSync(path.join(dist, 'index.html'), htmlPage({ fixture, width, fixtureData, hostCfg }))
 await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` })
 await waitForRender(cdp)
 await sleep(500)
@@ -164,8 +169,8 @@ await cdp.eval(`(() => { const p = document.getElementById('pane-root'); if (p) 
 await sleep(300)
 try {
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
-  fs.writeFileSync(path.join(shots, 'popover-open_w760.png'), Buffer.from(shot.data, 'base64'))
-  console.log('SCREENSHOT:', path.join(shots, 'popover-open_w760.png'))
+  fs.writeFileSync(path.join(shots, `popover-open_w${width}.png`), Buffer.from(shot.data, 'base64'))
+  console.log('SCREENSHOT:', path.join(shots, `popover-open_w${width}.png`))
 } catch (e) { console.error('screenshot failed', e.message) }
 
 cdp.close()
