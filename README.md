@@ -27,6 +27,16 @@ These images use sample data, rendered from the plugin's actual components (not 
 
 A Spark session is a useful example. Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the page keeps both subscription meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
 
+### Don't see the chip?
+
+The chip lives in the Desktop **status bar** — the strip along the bottom of the window — and the bar can be hidden (a per-machine preference, not a Settings toggle). When it's hidden, every status readout goes with it, not just this plugin's. Bring it back with any of:
+
+- **Ctrl+Shift+S** — the "Toggle status bar" shortcut (⌘+Shift+S on macOS)
+- **Right-click anywhere in the app → View → Toggle status bar**
+- **Ctrl+K** / **⌘K** — the command palette, then search "Toggle status bar"
+
+If the bar is visible but the chip still isn't there, check that **Provider Usage** is enabled under **Settings → Plugins**, and that its backend is enabled for your profile (see [Install](#install)).
+
 ## Provider support
 
 | Provider | What the plugin can show |
@@ -90,7 +100,7 @@ Check the current plugin allow-list first:
 hermes config get plugins.enabled
 ```
 
-Then run `hermes config set plugins.enabled` with the current entries plus `provider-usage`. Do not replace an existing list with the plugin name alone. Recycle the target Hermes gateway after changing the backend allow-list. In Desktop, enable **Provider Usage** under **Settings → Plugins** if it appears as opt-in.
+Then run `hermes config set plugins.enabled` with the current entries plus `provider-usage`. Do not replace an existing list with the plugin name alone. Recycle the target Hermes gateway after changing the backend allow-list. In Desktop, enable **Provider Usage** under **Settings → Plugins** if it appears as opt-in. If the chip doesn't appear after install, make sure the status bar itself is visible — see [Don't see the chip?](#dont-see-the-chip).
 
 ### Backend is per profile
 
