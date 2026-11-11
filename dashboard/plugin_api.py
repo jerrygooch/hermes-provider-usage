@@ -44,6 +44,178 @@ _PROVIDER_LABELS = {
     "ollama-cloud": "Ollama Cloud",
 }
 _SUPPORTED = {"openai-codex", "openrouter", "deepseek", "xai-oauth", "nous", "anthropic", "opencode-go", "opencode-zen", "ollama-cloud"}
+# Always-listed provider connection cards. These are metadata, not adapters:
+# nothing here performs a request, reads a credential value, or carries a
+# balance/quota figure. ``provider`` is the Hermes provider slug whose
+# non-secret presence summary decides Connected vs Not connected. Scopes keep
+# subscription quota and API billing separate because they are different
+# products even when one vendor sells both.
+_CONNECTION_CARDS = (
+    {
+        "id": "anthropic",
+        "name": "Claude / Anthropic",
+        "provider": "anthropic",
+        "description": (
+            "Claude subscription limits through Hermes' read-only Claude Code sign-in. "
+            "Anthropic API usage is a separate organization-level product."
+        ),
+        "docs_url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan",
+        "scopes": (
+            {
+                "id": "claude-subscription",
+                "label": "Claude subscription (Pro, Max, Ultra)",
+                "mode": "subscription",
+                "detail": (
+                    "Claude Code reports a 5-hour session limit and a weekly limit on Pro and Max; "
+                    "Ultra reports a weekly limit. Hermes core reads these windows from the existing "
+                    "Claude Code OAuth grant without refreshing it."
+                ),
+                "docs_url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan",
+            },
+            {
+                "id": "anthropic-api",
+                "label": "Anthropic API usage (Admin API)",
+                "mode": "api",
+                "static_state": "needs_permission",
+                "detail": (
+                    "Organization usage and cost reports require an Admin API key (sk-ant-admin…) with "
+                    "the admin role; individual accounts cannot use the Admin API. This card does not "
+                    "read, meter, or estimate API usage."
+                ),
+                "docs_url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
+            },
+        ),
+        "setup": {
+            "summary": (
+                "Sign in with Claude Code in this profile to read subscription limits, or configure "
+                "an Anthropic API key for inference. The API key alone does not unlock subscription usage."
+            ),
+            "env": ("ANTHROPIC_API_KEY",),
+            "command": "claude",
+            "links": (
+                {"label": "Claude Code plans", "url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan"},
+                {"label": "Admin API", "url": "https://platform.claude.com/docs/en/manage-claude/admin-api"},
+                {"label": "Usage and Cost API", "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"},
+            ),
+        },
+        "verification": "No live account in this build. Subscription reads use the existing core adapter; card states and metadata are fixture-tested.",
+    },
+    {
+        "id": "gemini",
+        "name": "Google Gemini API",
+        "provider": "gemini",
+        "description": (
+            "Gemini Developer API keys for inference. API usage, rate limits, and prepay credit are "
+            "visible in Google AI Studio; no supported account-level balance endpoint is documented "
+            "for API keys, so this card shows setup and capability limits only."
+        ),
+        "docs_url": "https://ai.google.dev/gemini-api/docs/api-key",
+        "scopes": (
+            {
+                "id": "gemini-api-key",
+                "label": "Gemini API key (Google AI Studio)",
+                "mode": "api",
+                "detail": (
+                    "Every key belongs to a Google Cloud project. Rate limits are enforced per project "
+                    "(RPM, TPM, RPD), not per key. Google AI Pro/Ultra subscription benefits apply in "
+                    "the AI Studio web UI only; direct Gemini API use is billed separately through "
+                    "the linked Cloud Billing account."
+                ),
+                "docs_url": "https://ai.google.dev/gemini-api/docs/google-ai-plans",
+            },
+            {
+                "id": "usage-billing",
+                "label": "Usage and prepay balance",
+                "mode": "api",
+                "static_state": "unavailable",
+                "detail": (
+                    "Google publishes usage in AI Studio (Dashboard → Usage) and prepay balance in "
+                    "Billing. This build has no supported read-only balance/quota endpoint for an API "
+                    "key; it never infers remaining quota from rate-limit caps or local token totals."
+                ),
+                "docs_url": "https://ai.google.dev/gemini-api/docs/billing",
+            },
+        ),
+        "setup": {
+            "summary": (
+                "Create a Gemini API key in Google AI Studio, then set GEMINI_API_KEY or GOOGLE_API_KEY "
+                "(or configure the Gemini provider in Hermes). Monitor usage and billing in AI Studio."
+            ),
+            "env": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+            "command": "",
+            "links": (
+                {"label": "Create API key", "url": "https://aistudio.google.com/apikey"},
+                {"label": "Usage dashboard", "url": "https://aistudio.google.com/usage"},
+                {"label": "Billing", "url": "https://aistudio.google.com/billing"},
+                {"label": "Rate limits", "url": "https://ai.google.dev/gemini-api/docs/rate-limits"},
+            ),
+        },
+        "verification": "No live account and no network adapter. Limit and billing statements are from the linked official docs; rendering is fixture-tested.",
+    },
+    {
+        "id": "zai",
+        "name": "Z.ai / GLM",
+        "provider": "zai",
+        "description": (
+            "GLM Coding Plan or standard pay-as-you-go API access. Hermes configures Z.AI for "
+            "inference; this build has no supported read-only quota or balance snapshot for Z.AI."
+        ),
+        "docs_url": "https://docs.z.ai/devpack/overview",
+        "scopes": (
+            {
+                "id": "coding-plan",
+                "label": "GLM Coding Plan (subscription)",
+                "mode": "subscription",
+                "detail": (
+                    "The plan applies a 5-hour limit and a weekly limit, shared across supported tools. "
+                    "Coding Plan keys use plan quota and do not consume standard API balance. Usage is "
+                    "shown in Z.ai's subscription and usage pages; this card does not invent a "
+                    "remaining percentage or credit count."
+                ),
+                "docs_url": "https://docs.z.ai/devpack/overview",
+            },
+            {
+                "id": "standard-api",
+                "label": "Standard API (pay-as-you-go)",
+                "mode": "api",
+                "detail": (
+                    "Standard API keys bill per token from account balance or applicable usage bundles. "
+                    "Standard keys do not consume Coding Plan quota, even inside a coding tool. Plan and "
+                    "API credentials are managed separately and are not interchangeable."
+                ),
+                "docs_url": "https://docs.z.ai/devpack/notice/api-key-management",
+            },
+            {
+                "id": "endpoints",
+                "label": "Regional endpoints",
+                "mode": "api",
+                "static_state": "info",
+                "detail": (
+                    "Global host: api.z.ai. China host: open.bigmodel.cn. Coding Plan uses "
+                    "/api/coding/paas/v4 (OpenAI) or /api/anthropic; the standard API uses "
+                    "/api/paas/v4. The key type, not the endpoint, determines billing."
+                ),
+                "docs_url": "https://docs.z.ai/devpack/quick-start",
+            },
+        ),
+        "setup": {
+            "summary": (
+                "Create a Coding Plan or Standard API key in Z.ai, then set GLM_API_KEY, ZAI_API_KEY, "
+                "or Z_AI_API_KEY and the matching base URL. Hermes can auto-detect the global, China, "
+                "and coding endpoints, or GLM_BASE_URL can pin one."
+            ),
+            "env": ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
+            "command": "",
+            "links": (
+                {"label": "Coding Plan", "url": "https://z.ai/subscribe"},
+                {"label": "API keys", "url": "https://z.ai/manage-apikey/apikey-list"},
+                {"label": "Subscription and usage", "url": "https://z.ai/manage-apikey/subscription"},
+                {"label": "China endpoint", "url": "https://open.bigmodel.cn/dev/api"},
+            ),
+        },
+        "verification": "No live account and no core account-usage hook. Product separation and endpoints are from official docs and Hermes' provider routing; rendering is fixture-tested.",
+    },
+)
 _ALIASES = {
     "codex": "openai-codex",
     "openai-codex": "openai-codex",
@@ -328,6 +500,115 @@ def _provider_unavailable(provider: str) -> dict[str, Any]:
         return _unavailable(provider, f"{label} credentials are not configured.")
     label = _PROVIDER_LABELS.get(provider, provider)
     return _unavailable(provider, f"{label} usage is unavailable for this account.")
+
+
+def _connection_cards() -> list[dict[str, Any]]:
+    """Always-listed connection cards for popular providers.
+
+    Presence comes only from core's non-secret credential summary. This
+    function performs no request and returns no balance, quota, usage window,
+    or credential value: an unconnected card says so instead of showing zeros.
+    """
+    core_ok = _core_seam_available()
+    cards: list[dict[str, Any]] = []
+    for spec in _CONNECTION_CARDS:
+        provider = str(spec["provider"])
+        summary = _credential_summary(provider) if core_ok else {}
+        configured = bool(summary.get("configured"))
+        source = str(summary.get("source") or "none")
+        if not core_ok:
+            state = "unavailable"
+            state_detail = (
+                "This Hermes build does not expose non-secret provider credential presence. "
+                "Upgrade Hermes to distinguish connected from unconnected accounts."
+            )
+        elif not configured:
+            state = "not_connected"
+            state_detail = f"No {spec['name']} credentials were found in this profile."
+        elif provider == "anthropic" and _anthropic_subscription_connected(source):
+            state = "connected"
+            state_detail = (
+                "Claude Code OAuth credential is connected. Subscription usage is read by Hermes core."
+            )
+        elif provider == "anthropic":
+            state = "connected_no_usage"
+            state_detail = (
+                "An Anthropic API key is configured for inference. Claude subscription limits require "
+                "a Claude Code OAuth sign-in; API usage needs separate organization Admin API access."
+            )
+        elif provider == "gemini":
+            state = "connected_no_usage"
+            state_detail = (
+                "A Gemini API key is configured for inference. Usage, rate limits, and prepay balance "
+                "are shown in Google AI Studio; this plugin has no supported account balance endpoint."
+            )
+        else:
+            state = "connected_no_usage"
+            state_detail = (
+                "A Z.AI credential is configured for inference. Coding Plan quota and standard API "
+                "balance are not exposed to this plugin, and the key type is not verified."
+            )
+
+        scopes: list[dict[str, Any]] = []
+        for scope in spec["scopes"]:
+            item = copy.deepcopy(scope)
+            static_state = item.pop("static_state", None)
+            if static_state:
+                item["state"] = static_state
+            elif not core_ok:
+                item["state"] = "unavailable"
+            elif not configured:
+                item["state"] = "not_connected"
+            elif provider == "anthropic" and item["id"] == "claude-subscription":
+                item["state"] = (
+                    "connected" if _anthropic_subscription_connected(source) else "not_connected"
+                )
+                if item["state"] == "not_connected":
+                    item["state_detail"] = (
+                        "No Claude Code OAuth sign-in was found; an API key is inference-only."
+                    )
+            elif provider == "zai":
+                item["state"] = "unverified"
+                item["state_detail"] = (
+                    "The configured key's product type (Coding Plan vs Standard API) is not reported."
+                )
+            else:
+                item["state"] = "connected"
+            scopes.append(item)
+
+        cards.append({
+            "id": spec["id"],
+            "name": spec["name"],
+            "provider": provider,
+            "description": spec["description"],
+            "state": state,
+            "state_detail": state_detail,
+            "configured": configured,
+            "credential_source": source,
+            "scopes": scopes,
+            "setup": copy.deepcopy(spec["setup"]),
+            "docs_url": spec["docs_url"],
+            "links": copy.deepcopy(spec["setup"]["links"]),
+            "verification": spec["verification"],
+        })
+    return cards
+
+
+def _anthropic_subscription_connected(source: str) -> bool:
+    """True only when an OAuth-shaped Claude credential is present.
+
+    A bare Anthropic API key is a separate product and must not read as a
+    Claude subscription. Pool rows expose a non-secret auth_type; inspect only
+    that metadata, never a token.
+    """
+    if source == "oauth":
+        return True
+    if source != "pool":
+        return False
+    return any(
+        "oauth" in str(account.get("auth_type") or "").lower()
+        for account in _account_identities("anthropic")
+    )
 
 
 def _fetch_codex() -> dict[str, Any]:
@@ -4337,5 +4618,6 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
         "active": {"provider": active_provider, "model": active_model},
         "default_provider": default_provider,
         "providers": providers,
+        "connections": _connection_cards(),
         "catalog": _definition_catalog(loaded, rows=rows, prepared=prepared, profile=profile),
     }

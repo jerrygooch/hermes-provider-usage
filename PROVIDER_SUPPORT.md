@@ -15,7 +15,62 @@ Provider Usage answers one practical question: **what shared account resource go
 | Ollama Cloud | Session, weekly, and monthly usage windows plus per-model request counts | Experimental | Uses an account usage endpoint that is community-known rather than officially documented, so responses may change. Plans differ: newer plans report monthly credit usage; older ones report 5-hour and weekly windows. Reset times appear only when the account reports them; otherwise they stay marked unavailable. |
 | Nous Portal | Portal credit snapshot | Experimental | Availability depends on the installed Hermes version and the account capabilities exposed by its runtime. |
 | Declarative JSON definitions | Any fixed read-only HTTPS usage or balance endpoint described by the bundled v1 schema | Tested | Data-only schema; no scripts or literal secrets. Profile-local files require a local, fingerprint-bound approval before any credential read or request. Public pinned peer only, no redirects, bounded response/deadline. GitHub rate limits ship without a credential; Moonshot and ElevenLabs are available-to-connect. |
-| Anthropic, Google, Azure, and local providers | Honest capability state | Planned | A provider is added only when there is a useful authenticated account-level source. Until then, the plugin reports the limitation instead of guessing. |
+| Claude / Anthropic | Always-listed connection card. Claude subscription windows when a Claude Code OAuth grant exists; Anthropic API usage/admin boundary otherwise | Schema/fixture-tested; subscription read is the existing core adapter; **not live-verified in this change** | Subscription usage uses the core read-only Claude Code OAuth snapshot. Anthropic API usage and cost reports are a separate product: they require an organization Admin API key (`sk-ant-admin…`) and the admin role, and individual accounts cannot use the Admin API. The card never shows a zero or estimates API spend. |
+| Google Gemini API | Always-listed connection card with API-key setup, per-project rate-limit facts, and official dashboard links | Schema/fixture-tested; **no live account and no network adapter** | No supported account-balance or remaining-quota endpoint is documented for a Gemini API key. Google publishes usage in AI Studio and prepay balance in Billing. Google AI Pro/Ultra benefits apply in the AI Studio web UI only; direct API use is billed separately through Cloud Billing. The card never infers quota from rate-limit caps or a local ledger. |
+| Z.ai / GLM | Always-listed connection card separating GLM Coding Plan subscription quota from standard pay-as-you-go API billing, including global/China endpoints | Schema/fixture-tested; **no live account and no core `zai` account-usage hook** | Coding Plan applies a 5-hour and a weekly limit across supported tools; Coding Plan keys do not consume standard API balance. Standard keys bill from balance or usage bundles and do not consume plan quota. Keys are product-specific; global is `api.z.ai`, China is `open.bigmodel.cn`. No remaining quota or credit is invented. |
+
+## Always-listed popular-provider cards
+
+Three built-in cards appear even when no credential exists. They are rendered
+from code-owned metadata plus Hermes' non-secret `provider_credential_summary`;
+they do not call a provider, read a credential value, or contribute a number to
+the usage rows. The states are `connected`, `connected_no_usage`,
+`not_connected`, `needs_permission`, `unavailable`, and `unverified`.
+
+- **Claude / Anthropic** (`anthropic`)
+  - Supported read: Claude subscription limits through the core read-only
+    Claude Code OAuth snapshot (`5-hour`, weekly, and model-scoped windows when
+    the account reports them).
+  - Separate product: Anthropic API usage/cost reports through the Admin API.
+    An Admin API key (`sk-ant-admin…`) plus the organization admin role is
+    required, and individual accounts cannot use the Admin API. This plugin
+    does not read or estimate API usage.
+  - Docs: [Claude Code plans](https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan),
+    [Admin API](https://platform.claude.com/docs/en/manage-claude/admin-api),
+    [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api).
+  - Verification: existing core adapter; card states/metadata are fixture-tested.
+    No live account was used in this change.
+- **Google Gemini API** (`gemini`)
+  - Supported read: inference with a Gemini Developer API key. Rate limits are
+    per project (RPM, TPM, RPD); every key belongs to a Google Cloud project.
+  - No supported account balance/quota read: Google exposes usage in
+    [AI Studio → Usage](https://aistudio.google.com/usage) and prepay balance in
+    [Billing](https://aistudio.google.com/billing). This plugin does not infer a
+    remaining amount from rate-limit caps or local token totals.
+  - Subscription boundary: Google AI Pro/Ultra benefits apply in the AI Studio
+    web UI only; direct Gemini API use is billed separately through Cloud
+    Billing. See [Google AI plans](https://ai.google.dev/gemini-api/docs/google-ai-plans)
+    and [Gemini API billing](https://ai.google.dev/gemini-api/docs/billing).
+  - Docs: [API keys](https://ai.google.dev/gemini-api/docs/api-key),
+    [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
+  - Verification: no live account and no network adapter; docs-verified limits,
+    fixture-tested rendering.
+- **Z.ai / GLM** (`zai`)
+  - Supported read: inference through Hermes' `zai` provider. There is no core
+    `zai` account-usage hook, so the card does not show quota or credits.
+  - Product split: GLM Coding Plan is subscription quota (5-hour and weekly
+    limits shared across supported tools). Standard API keys are pay-as-you-go
+    and bill from account balance or usage bundles. Standard keys do not consume
+    Coding Plan quota; Coding Plan keys do not consume API balance.
+  - Endpoints: global `https://api.z.ai/api/paas/v4`; China
+    `https://open.bigmodel.cn/api/paas/v4`. Coding Plan uses
+    `/api/coding/paas/v4` (OpenAI) or `/api/anthropic`. Key type, not endpoint,
+    determines billing. See [Coding Plan](https://docs.z.ai/devpack/overview),
+    [API key management](https://docs.z.ai/devpack/notice/api-key-management),
+    [quick start](https://docs.z.ai/devpack/quick-start), and
+    [China platform](https://open.bigmodel.cn/dev/api).
+  - Verification: no live account; product separation and endpoints are from
+    official docs and Hermes provider routing; rendering is fixture-tested.
 
 ## OpenCode products
 
@@ -68,7 +123,13 @@ runtime key, credential store, or private auth module.
   provider bodies the pane needs (OpenRouter credits/key, DeepSeek balances,
   Ollama usage/balance, OpenCode Go usage, Zen models) ride back on
   `snapshot.raw`; the same plugin parsers that predate the migration rebuild the
-  row from them.
+  row from them. The Anthropic snapshot is the Claude Code OAuth subscription
+  usage only; Anthropic API Admin usage is not fetched.
+- **Always-listed connection cards:** Claude / Anthropic, Google Gemini API, and
+  Z.ai / GLM use only code-owned metadata plus
+  `provider_credential_summary(provider)` (presence/source). No request, no
+  balance, no quota, and no credential value is produced; Google and Z.ai have
+  no account-usage adapter here.
 - **Brokered subscription sign-in:** xAI OAuth calls
   `credentialed_provider_request("xai-oauth", ...)` for both the credits proxy
   and the gRPC fallback; the token never enters plugin code.

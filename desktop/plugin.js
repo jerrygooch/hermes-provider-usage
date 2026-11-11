@@ -2407,6 +2407,178 @@ function CatalogCard({ entry }) {
   })
 }
 
+function connectionStateMeta(entry) {
+  const state = String(entry?.state || '').toLowerCase()
+  if (state === 'connected') return { label: 'Connected', variant: 'success' }
+  if (state === 'connected_no_usage') return { label: 'Connected · usage unavailable', variant: 'outline' }
+  if (state === 'not_connected') return { label: 'Not connected', variant: 'muted' }
+  if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn' }
+  if (state === 'unavailable') return { label: 'Unavailable', variant: 'muted' }
+  return { label: 'Unknown state', variant: 'muted' }
+}
+
+function connectionScopeStateMeta(scope) {
+  const state = String(scope?.state || '').toLowerCase()
+  if (state === 'connected') return { label: 'Connected', variant: 'success' }
+  if (state === 'not_connected') return { label: 'Not connected', variant: 'muted' }
+  if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn' }
+  if (state === 'unavailable') return { label: 'Not available', variant: 'muted' }
+  if (state === 'unverified') return { label: 'Not verified', variant: 'warn' }
+  if (state === 'info') return null
+  return { label: 'Unknown', variant: 'muted' }
+}
+
+function connectionSetupText(entry) {
+  const setup = entry?.setup || {}
+  const env = Array.isArray(setup.env) ? setup.env.map(String).filter(Boolean) : []
+  const links = Array.isArray(entry?.links) ? entry.links : []
+  const scopes = Array.isArray(entry?.scopes) ? entry.scopes : []
+  return [
+    `${entry?.name || entry?.provider || 'Provider'} (${entry?.provider || entry?.id || 'unknown'})`,
+    entry?.description ? String(entry.description) : null,
+    `Status: ${connectionStateMeta(entry).label}`,
+    entry?.state_detail ? String(entry.state_detail) : null,
+    ...scopes.map(scope => {
+      const meta = connectionScopeStateMeta(scope)
+      return `${scope?.label || 'Scope'}${meta ? ` — ${meta.label}` : ''}: ${scope?.detail || ''}`
+    }),
+    setup.summary ? `Setup: ${setup.summary}` : null,
+    env.length ? `Credentials: ${env.join(' or ')}` : null,
+    setup.command ? `Command: ${setup.command}` : null,
+    ...links.map(link => `${link?.label || 'Docs'}: ${link?.url || ''}`),
+    entry?.docs_url ? `Docs: ${entry.docs_url}` : null,
+    entry?.verification ? `Verification: ${entry.verification}` : null
+  ].filter(Boolean).join('\n')
+}
+
+function ConnectionCard({ entry }) {
+  const state = connectionStateMeta(entry)
+  const scopes = Array.isArray(entry?.scopes) ? entry.scopes : []
+  const setup = entry?.setup || {}
+  const env = Array.isArray(setup.env) ? setup.env.map(String).filter(Boolean) : []
+  const links = Array.isArray(entry?.links) ? entry.links : []
+  const copy = () => {
+    haptic('tap')
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(connectionSetupText(entry))
+        host.notify({ kind: 'info', message: 'Setup copied. This card never reads credentials or fetches account data for you.' })
+        return
+      }
+    } catch {
+      // Fall through to a plain notice when the clipboard is unavailable.
+    }
+    host.notify({ kind: 'info', message: 'Setup details are shown on the card. Credentials stay in Hermes.' })
+  }
+  return jsxs('div', {
+    style: { border: '1px solid var(--ui-stroke-tertiary)', borderRadius: 8, background: 'var(--ui-bg-card)', padding: '11px 13px', display: 'grid', gap: 7 },
+    children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', minWidth: 0 },
+        children: [
+          jsx('span', { style: { ...textPrimary, fontSize: 12, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry?.name || entry?.provider || 'Provider' }, 'name'),
+          jsx(Badge, { variant: state.variant, size: 'xs', style: state.variant === 'outline' || state.variant === 'muted' ? { color: 'var(--ui-text-secondary)' } : undefined, children: state.label }, 'state'),
+          jsx(Badge, { variant: 'outline', size: 'xs', style: { color: 'var(--ui-text-secondary)' }, children: 'Built-in' }, 'source')
+        ]
+      }),
+      entry?.description
+        ? jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: entry.description }, 'description')
+        : null,
+      jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5 }, children: entry?.state_detail || '' }, 'state-detail'),
+      scopes.length > 0
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 6, paddingTop: 8, borderTop: HAIRLINE },
+            children: [
+              jsx(SectionLabel, { children: 'Supported scopes' }),
+              ...scopes.map((scope, index) => {
+                const meta = connectionScopeStateMeta(scope)
+                return jsxs('div', {
+                  style: { display: 'grid', gap: 2 },
+                  children: [
+                    jsxs('div', {
+                      style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+                      children: [
+                        jsx('span', { style: { ...textPrimary, fontSize: 10.5, fontWeight: 550 }, children: scope?.label || 'Scope' }, `label-${index}`),
+                        meta ? jsx(Badge, { variant: meta.variant, size: 'xs', style: meta.variant === 'outline' || meta.variant === 'muted' ? { color: 'var(--ui-text-secondary)' } : undefined, children: meta.label }, `state-${index}`) : null
+                      ]
+                    }),
+                    jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.5, overflowWrap: 'anywhere' }, children: scope?.detail || '' }, `detail-${index}`),
+                    scope?.state_detail
+                      ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: scope.state_detail }, `state-detail-${index}`)
+                      : null,
+                    scope?.docs_url
+                      ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: scope.docs_url }, `docs-${index}`)
+                      : null
+                  ]
+                }, `${entry?.id || 'connection'}-${scope?.id || index}`)
+              })
+            ]
+          })
+        : null,
+      jsxs('div', {
+        style: { display: 'grid', gap: 3, paddingTop: 8, borderTop: HAIRLINE },
+        children: [
+          jsx(SectionLabel, { children: 'Setup' }),
+          setup.summary
+            ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5 }, children: setup.summary }, 'summary')
+            : null,
+          env.length > 0
+            ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: `Environment: ${env.join(' or ')}` }, 'env')
+            : null,
+          setup.command
+            ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: `Command: ${setup.command}` }, 'command')
+            : null
+        ]
+      }, 'setup'),
+      links.length > 0
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 2 },
+            children: [
+              jsx(SectionLabel, { children: 'Official links' }),
+              ...links.map((link, index) => jsx('span', {
+                style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' },
+                children: `${link?.label || 'Docs'}: ${link?.url || ''}`
+              }, `link-${index}`))
+            ]
+          }, 'links')
+        : null,
+      entry?.verification
+        ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: `Verification: ${entry.verification}` }, 'verification')
+        : null,
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 8, paddingTop: 2, flexWrap: 'wrap' },
+        children: [
+          jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: copy, children: 'Copy setup steps' }, 'copy'),
+          jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, minWidth: 0 }, children: 'No balance or quota is inferred.' }, 'note')
+        ]
+      })
+    ]
+  })
+}
+
+function ConnectionCardsSection({ connections }) {
+  if (!Array.isArray(connections) || connections.length === 0) return null
+  const connected = connections.filter(entry => String(entry?.state || '').toLowerCase() === 'connected').length
+  return jsxs('section', {
+    'aria-label': 'Popular provider connections',
+    style: { padding: '15px 18px 18px', borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, {
+        aside: `${connected} of ${connections.length} connected`,
+        children: 'Popular providers'
+      }, 'title'),
+      jsx('span', {
+        style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5, paddingTop: 4 },
+        children: 'Always listed. Cards report credential presence and supported read paths only; they never invent a balance, quota, or local spend total.'
+      }, 'intro'),
+      jsx('div', {
+        style: { display: 'grid', gap: 8, paddingTop: 10 },
+        children: connections.map(entry => jsx(ConnectionCard, { entry }, entry.id))
+      }, 'cards')
+    ]
+  })
+}
+
 function CatalogSection({ catalog }) {
   if (!catalog || !Array.isArray(catalog.definitions)) return null
   const definitions = catalog.definitions
@@ -2634,6 +2806,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
             }, 'footer')
           ]
         }, 'accounts'),
+        jsx(ConnectionCardsSection, { connections: matched?.connections }, 'connections'),
         jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog')
       ]
     })
@@ -2645,7 +2818,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   })
 }
 
-export { CatalogSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { CatalogSection, ConnectionCard, ConnectionCardsSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, connectionSetupText, connectionStateMeta, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

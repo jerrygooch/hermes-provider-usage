@@ -49,9 +49,14 @@ If the bar is visible but the chip still isn't there, check that **Provider Usag
 | SuperGrok / xAI OAuth | SuperGrok subscription quota and reset data returned by the Grok billing endpoint |
 | Ollama Cloud | Subscription windows (5-hour, weekly, and monthly credit usage, whichever the account reports) and per-model request counts |
 | Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it |
+| Claude / Anthropic | Always-listed card: Claude subscription limits through the existing Claude Code OAuth read; Anthropic API usage/admin access is a separate organization product and is not metered here |
+| Google Gemini API | Always-listed card: Gemini API key setup and documented per-project rate limits; no supported account balance/quota endpoint, so usage stays in Google AI Studio |
+| Z.ai / GLM | Always-listed card: GLM Coding Plan quota versus standard pay-as-you-go API billing, with global and China endpoints; no core account-usage hook, so no quota or credit is invented |
 | Declarative JSON | Any documented read-only HTTPS usage/balance endpoint you describe with the bundled schema (GitHub rate limits ship ready to use) |
 
 OpenCode appears as one provider family in the popover/page, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.
+
+The **Claude / Anthropic**, **Google Gemini API**, and **Z.ai / GLM** cards are always listed, including with no credentials. They are connection and capability cards, not meters: an unconnected card says **Not connected**, and none of them invents a zero balance, remaining quota, or local spend total. Anthropic is the only one of the three with a supported account read today — the existing core Claude Code OAuth subscription snapshot. Anthropic API usage needs organization Admin API access and is not read here. Gemini API usage and prepay balance stay in Google AI Studio; Z.ai Coding Plan quota and standard API balance stay in Z.ai, because Hermes has no account-usage hook for `zai`.
 
 The Grok billing response used here exposes quota data but does not provide a trustworthy plan-tier name. The plugin therefore uses the conservative label **SuperGrok** and does not infer a higher tier.
 

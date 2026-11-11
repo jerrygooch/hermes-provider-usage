@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "definitions_version": 1,
+  "fetched_at": "2026-11-11T18:03:07Z",
+  "account_profile": "default",
+  "active": { "provider": "xai-oauth", "model": "mimo-v2.5" },
+  "default_provider": "xai-oauth",
+  "providers": [
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "configured": true,
+      "capability": "usage",
+      "source": "grok_cli_proxy",
+      "plan": "SuperGrok",
+      "limits": [
+        {
+          "id": "supergrok",
+          "label": "SuperGrok",
+          "windows": [
+            {
+              "label": "Weekly",
+              "used_percent": 38,
+              "remaining_percent": 62,
+              "reset_at": "2026-11-18T00:00:00Z"
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": []
+    }
+  ],
+  "connections": [
+    {
+      "id": "anthropic",
+      "name": "Claude / Anthropic",
+      "provider": "anthropic",
+      "description": "Claude subscription limits through Hermes' read-only Claude Code sign-in. Anthropic API usage is a separate organization-level product.",
+      "state": "not_connected",
+      "state_detail": "No Claude / Anthropic credentials were found in this profile.",
+      "configured": false,
+      "credential_source": "none",
+      "scopes": [
+        {
+          "id": "claude-subscription",
+          "label": "Claude subscription (Pro, Max, Ultra)",
+          "mode": "subscription",
+          "state": "not_connected",
+          "detail": "Claude Code reports a 5-hour session limit and a weekly limit on Pro and Max; Ultra reports a weekly limit. Hermes core reads these windows from the existing Claude Code OAuth grant without refreshing it.",
+          "docs_url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan"
+        },
+        {
+          "id": "anthropic-api",
+          "label": "Anthropic API usage (Admin API)",
+          "mode": "api",
+          "state": "needs_permission",
+          "detail": "Organization usage and cost reports require an Admin API key (sk-ant-admin…) with the admin role; individual accounts cannot use the Admin API. This card does not read, meter, or estimate API usage.",
+          "docs_url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+        }
+      ],
+      "setup": {
+        "summary": "Sign in with Claude Code in this profile to read subscription limits, or configure an Anthropic API key for inference. The API key alone does not unlock subscription usage.",
+        "env": ["ANTHROPIC_API_KEY"],
+        "command": "claude",
+        "links": [
+          { "label": "Claude Code plans", "url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan" },
+          { "label": "Admin API", "url": "https://platform.claude.com/docs/en/manage-claude/admin-api" },
+          { "label": "Usage and Cost API", "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api" }
+        ]
+      },
+      "docs_url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan",
+      "links": [
+        { "label": "Claude Code plans", "url": "https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan" },
+        { "label": "Admin API", "url": "https://platform.claude.com/docs/en/manage-claude/admin-api" }
+      ],
+      "verification": "No live account in this build. Subscription reads use the existing core adapter; card states and metadata are fixture-tested."
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini API",
+      "provider": "gemini",
+      "description": "Gemini Developer API keys for inference. API usage, rate limits, and prepay credit are visible in Google AI Studio; no supported account-level balance endpoint is documented for API keys, so this card shows setup and capability limits only.",
+      "state": "not_connected",
+      "state_detail": "No Google Gemini API credentials were found in this profile.",
+      "configured": false,
+      "credential_source": "none",
+      "scopes": [
+        {
+          "id": "gemini-api-key",
+          "label": "Gemini API key (Google AI Studio)",
+          "mode": "api",
+          "state": "not_connected",
+          "detail": "Every key belongs to a Google Cloud project. Rate limits are enforced per project (RPM, TPM, RPD), not per key. Google AI Pro/Ultra subscription benefits apply in the AI Studio web UI only; direct Gemini API use is billed separately through the linked Cloud Billing account.",
+          "docs_url": "https://ai.google.dev/gemini-api/docs/google-ai-plans"
+        },
+        {
+          "id": "usage-billing",
+          "label": "Usage and prepay balance",
+          "mode": "api",
+          "state": "unavailable",
+          "detail": "Google publishes usage in AI Studio (Dashboard → Usage) and prepay balance in Billing. This build has no supported read-only balance/quota endpoint for an API key; it never infers remaining quota from rate-limit caps or local token totals.",
+          "docs_url": "https://ai.google.dev/gemini-api/docs/billing"
+        }
+      ],
+      "setup": {
+        "summary": "Create a Gemini API key in Google AI Studio, then set GEMINI_API_KEY or GOOGLE_API_KEY (or configure the Gemini provider in Hermes). Monitor usage and billing in AI Studio.",
+        "env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "command": "",
+        "links": [
+          { "label": "Create API key", "url": "https://aistudio.google.com/apikey" },
+          { "label": "Usage dashboard", "url": "https://aistudio.google.com/usage" },
+          { "label": "Billing", "url": "https://aistudio.google.com/billing" },
+          { "label": "Rate limits", "url": "https://ai.google.dev/gemini-api/docs/rate-limits" }
+        ]
+      },
+      "docs_url": "https://ai.google.dev/gemini-api/docs/api-key",
+      "links": [
+        { "label": "Create API key", "url": "https://aistudio.google.com/apikey" },
+        { "label": "Usage dashboard", "url": "https://aistudio.google.com/usage" }
+      ],
+      "verification": "No live account and no network adapter. Limit and billing statements are from the linked official docs; rendering is fixture-tested."
+    },
+    {
+      "id": "zai",
+      "name": "Z.ai / GLM",
+      "provider": "zai",
+      "description": "GLM Coding Plan or standard pay-as-you-go API access. Hermes configures Z.AI for inference; this build has no supported read-only quota or balance snapshot for Z.AI.",
+      "state": "not_connected",
+      "state_detail": "No Z.ai / GLM credentials were found in this profile.",
+      "configured": false,
+      "credential_source": "none",
+      "scopes": [
+        {
+          "id": "coding-plan",
+          "label": "GLM Coding Plan (subscription)",
+          "mode": "subscription",
+          "state": "not_connected",
+          "detail": "The plan applies a 5-hour limit and a weekly limit, shared across supported tools. Coding Plan keys use plan quota and do not consume standard API balance. Usage is shown in Z.ai's subscription and usage pages; this card does not invent a remaining percentage or credit count.",
+          "docs_url": "https://docs.z.ai/devpack/overview"
+        },
+        {
+          "id": "standard-api",
+          "label": "Standard API (pay-as-you-go)",
+          "mode": "api",
+          "state": "not_connected",
+          "detail": "Standard API keys bill per token from account balance or applicable usage bundles. Standard keys do not consume Coding Plan quota, even inside a coding tool. Plan and API credentials are managed separately and are not interchangeable.",
+          "docs_url": "https://docs.z.ai/devpack/notice/api-key-management"
+        },
+        {
+          "id": "endpoints",
+          "label": "Regional endpoints",
+          "mode": "api",
+          "state": "info",
+          "detail": "Global host: api.z.ai. China host: open.bigmodel.cn. Coding Plan uses /api/coding/paas/v4 (OpenAI) or /api/anthropic; the standard API uses /api/paas/v4. The key type, not the endpoint, determines billing.",
+          "docs_url": "https://docs.z.ai/devpack/quick-start"
+        }
+      ],
+      "setup": {
+        "summary": "Create a Coding Plan or Standard API key in Z.ai, then set GLM_API_KEY, ZAI_API_KEY, or Z_AI_API_KEY and the matching base URL. Hermes can auto-detect the global, China, and coding endpoints, or GLM_BASE_URL can pin one.",
+        "env": ["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"],
+        "command": "",
+        "links": [
+          { "label": "Coding Plan", "url": "https://z.ai/subscribe" },
+          { "label": "API keys", "url": "https://z.ai/manage-apikey/apikey-list" },
+          { "label": "Subscription and usage", "url": "https://z.ai/manage-apikey/subscription" },
+          { "label": "China endpoint", "url": "https://open.bigmodel.cn/dev/api" }
+        ]
+      },
+      "docs_url": "https://docs.z.ai/devpack/overview",
+      "links": [
+        { "label": "Coding Plan", "url": "https://z.ai/subscribe" },
+        { "label": "API keys", "url": "https://z.ai/manage-apikey/apikey-list" }
+      ],
+      "verification": "No live account and no core account-usage hook. Product separation and endpoints are from official docs and Hermes' provider routing; rendering is fixture-tested."
+    }
+  ],
+  "catalog": {
+    "version": 1,
+    "profile": "default",
+    "scope": "default",
+    "scope_kind": "hermes_home",
+    "directory": "$HERMES_HOME/provider-usage/providers",
+    "approvals_file": "approvals.json (outside the definitions directory)",
+    "definitions": [],
+    "counts": {},
+    "bundled_count": 0,
+    "profile_count": 0
+  }
+}

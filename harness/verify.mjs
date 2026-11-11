@@ -68,6 +68,13 @@ const EXPECT = {
     forbidden: ['$12.50', 'Subscription renewal date is not exposed', 'No credential required for this definition.'],
     chipNeedle: 'Example',
     chipGovern: '12.50'
+  },
+  'popular-connections': {
+    registeredName: 'Provider Usage',
+    needles: ['Popular providers', 'Claude / Anthropic', 'Google Gemini API', 'Z.ai / GLM', 'Not connected', 'Permission needed', 'individual accounts cannot use the Admin API', 'Not available', 'Google AI Pro/Ultra subscription benefits apply in the AI Studio web UI only', 'open.bigmodel.cn', 'No balance or quota is inferred.'],
+    forbidden: ['$0.00', '0% left'],
+    chipNeedle: 'Grok',
+    chipGovern: 'wk 62%'
   }
 }
 

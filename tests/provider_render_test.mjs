@@ -122,7 +122,7 @@ const renderPage = () => renderToStaticMarkup(React.createElement(pageContributi
 // The provider is resolved asynchronously from the focused session. Under SSR
 // effects do not run, so seed the account memory the hook starts from (a real
 // mounted lifecycle is covered by plugin_lifecycle_test.mjs).
-const { activeSourceId, rememberProvider, DefinitionPanel, DefinitionBadge, CatalogSection, catalogSetupText } = mod.namespace
+const { activeSourceId, rememberProvider, DefinitionPanel, DefinitionBadge, CatalogSection, catalogSetupText, ConnectionCardsSection, connectionSetupText } = mod.namespace
 function seedProvider(profile = 'default', provider = 'xai-oauth') {
   world.sessionId = ''
   rememberProvider(activeSourceId(world.connectionId, profile), provider)
@@ -528,6 +528,138 @@ queryResult = {
 const pageUsdBalance = renderPage()
 check('legacy USD built-in balance keeps the dollar sign', pageUsdBalance, '$43.50')
 nocheck('legacy USD built-in is not labeled currency-unknown', pageUsdBalance, 'currency not reported')
+
+// Always-listed popular-provider cards: no account, no credential, no number.
+const connectionCards = [
+  {
+    id: 'anthropic', name: 'Claude / Anthropic', provider: 'anthropic', state: 'not_connected',
+    state_detail: 'No Claude / Anthropic credentials were found in this profile.',
+    configured: false, credential_source: 'none',
+    description: 'Claude subscription limits through Hermes read-only Claude Code sign-in.',
+    scopes: [
+      { id: 'claude-subscription', label: 'Claude subscription (Pro, Max, Ultra)', state: 'not_connected', detail: 'Claude Code reports a 5-hour session limit and a weekly limit.', docs_url: 'https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan' },
+      { id: 'anthropic-api', label: 'Anthropic API usage (Admin API)', state: 'needs_permission', detail: 'Requires an Admin API key with the admin role; individual accounts cannot use the Admin API.', docs_url: 'https://platform.claude.com/docs/en/manage-claude/usage-cost-api' }
+    ],
+    setup: { summary: 'Sign in with Claude Code in this profile to read subscription limits.', env: ['ANTHROPIC_API_KEY'], command: 'claude', links: [{ label: 'Admin API', url: 'https://platform.claude.com/docs/en/manage-claude/admin-api' }] },
+    docs_url: 'https://support.anthropic.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan',
+    links: [{ label: 'Usage and Cost API', url: 'https://platform.claude.com/docs/en/manage-claude/usage-cost-api' }],
+    verification: 'No live account in this build. Card states and metadata are fixture-tested.'
+  },
+  {
+    id: 'gemini', name: 'Google Gemini API', provider: 'gemini', state: 'not_connected',
+    state_detail: 'No Google Gemini API credentials were found in this profile.',
+    configured: false, credential_source: 'none',
+    description: 'Gemini Developer API keys for inference. Usage is visible in Google AI Studio.',
+    scopes: [
+      { id: 'gemini-api-key', label: 'Gemini API key (Google AI Studio)', state: 'not_connected', detail: 'Google AI Pro/Ultra subscription benefits apply in the AI Studio web UI only; direct Gemini API use is billed separately.', docs_url: 'https://ai.google.dev/gemini-api/docs/google-ai-plans' },
+      { id: 'usage-billing', label: 'Usage and prepay balance', state: 'unavailable', detail: 'No supported read-only balance/quota endpoint for an API key.', docs_url: 'https://ai.google.dev/gemini-api/docs/billing' }
+    ],
+    setup: { summary: 'Create a Gemini API key in Google AI Studio.', env: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'], command: '', links: [{ label: 'Usage dashboard', url: 'https://aistudio.google.com/usage' }] },
+    docs_url: 'https://ai.google.dev/gemini-api/docs/api-key',
+    links: [{ label: 'Billing', url: 'https://aistudio.google.com/billing' }],
+    verification: 'No live account and no network adapter; rendering is fixture-tested.'
+  },
+  {
+    id: 'zai', name: 'Z.ai / GLM', provider: 'zai', state: 'not_connected',
+    state_detail: 'No Z.ai / GLM credentials were found in this profile.',
+    configured: false, credential_source: 'none',
+    description: 'GLM Coding Plan or standard pay-as-you-go API access.',
+    scopes: [
+      { id: 'coding-plan', label: 'GLM Coding Plan (subscription)', state: 'not_connected', detail: 'A 5-hour limit and a weekly limit, shared across supported tools.', docs_url: 'https://docs.z.ai/devpack/overview' },
+      { id: 'standard-api', label: 'Standard API (pay-as-you-go)', state: 'not_connected', detail: 'Standard API keys bill per token from account balance.', docs_url: 'https://docs.z.ai/devpack/notice/api-key-management' },
+      { id: 'endpoints', label: 'Regional endpoints', state: 'info', detail: 'Global host: api.z.ai. China host: open.bigmodel.cn.' }
+    ],
+    setup: { summary: 'Create a Coding Plan or Standard API key in Z.ai.', env: ['GLM_API_KEY', 'ZAI_API_KEY'], command: '', links: [{ label: 'API keys', url: 'https://z.ai/manage-apikey/apikey-list' }] },
+    docs_url: 'https://docs.z.ai/devpack/overview',
+    links: [{ label: 'Subscription and usage', url: 'https://z.ai/manage-apikey/subscription' }],
+    verification: 'No live account and no core account-usage hook; rendering is fixture-tested.'
+  }
+]
+
+world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+world.gateway = 'open'
+seedProvider('default', '')
+queryResult = {
+  data: { ...fixture('2026-11-11T02:03:07Z'), providers: [], connections: connectionCards, catalog: { definitions: [] } },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  error: null,
+  refetch: () => {}
+}
+const pageConnections = renderPage()
+check('unconnected page still lists Claude / Anthropic', pageConnections, 'Claude / Anthropic')
+check('unconnected page still lists Google Gemini API', pageConnections, 'Google Gemini API')
+check('unconnected page still lists Z.ai / GLM', pageConnections, 'Z.ai / GLM')
+check('unconnected cards say Not connected', pageConnections, 'Not connected')
+check('Anthropic card separates admin API permission', pageConnections, 'Permission needed')
+check('Anthropic card names the Admin API boundary', pageConnections, 'individual accounts cannot use the Admin API')
+check('Gemini usage scope is not available', pageConnections, 'Not available')
+check('Gemini explains subscription vs API billing', pageConnections, 'Google AI Pro/Ultra subscription benefits apply in the AI Studio web UI only')
+check('Z.ai card names both regional hosts', pageConnections, 'open.bigmodel.cn')
+check('cards state that no balance is inferred', pageConnections, 'No balance or quota is inferred.')
+nocheck('unconnected cards do not fabricate zero dollars', pageConnections, '$0.00')
+nocheck('unconnected cards do not fabricate a zero meter', pageConnections, '0% left')
+nocheck('old payloads without connections hide the section', pageLoaded, 'Popular providers')
+
+const configuredConnections = connectionCards.map(card => {
+  if (card.id === 'anthropic') {
+    return {
+      ...card,
+      state: 'connected_no_usage',
+      configured: true,
+      credential_source: 'env',
+      state_detail: 'An Anthropic API key is configured for inference. Claude subscription limits require a Claude Code OAuth sign-in.',
+      scopes: card.scopes.map(scope => scope.id === 'claude-subscription'
+        ? { ...scope, state: 'not_connected', state_detail: 'No Claude Code OAuth sign-in was found; an API key is inference-only.' }
+        : scope)
+    }
+  }
+  if (card.id === 'gemini') {
+    return {
+      ...card,
+      state: 'connected_no_usage',
+      configured: true,
+      credential_source: 'config',
+      state_detail: 'A Gemini API key is configured for inference. Usage and prepay balance are shown in Google AI Studio.',
+      scopes: card.scopes.map(scope => scope.id === 'gemini-api-key' ? { ...scope, state: 'connected' } : scope)
+    }
+  }
+  return {
+    ...card,
+    state: 'connected_no_usage',
+    configured: true,
+    credential_source: 'env',
+    state_detail: 'A Z.AI credential is configured for inference. The key type is not verified.',
+    scopes: card.scopes.map(scope => scope.id === 'endpoints' ? scope : {
+      ...scope,
+      state: 'unverified',
+      state_detail: "The configured key's product type (Coding Plan vs Standard API) is not reported."
+    })
+  }
+})
+queryResult = {
+  data: { ...fixture('2026-11-11T02:03:07Z'), providers: [], connections: configuredConnections, catalog: { definitions: [] } },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  error: null,
+  refetch: () => {}
+}
+const pageConfiguredConnections = renderPage()
+check('configured inference cards say usage unavailable', pageConfiguredConnections, 'Connected · usage unavailable')
+check('Anthropic API key is not called a subscription', pageConfiguredConnections, 'API key is inference-only')
+check('Z.ai key type is explicitly not verified', pageConfiguredConnections, 'Not verified')
+check('Gemini usage remains not available after key setup', pageConfiguredConnections, 'Not available')
+nocheck('configured cards still show no fabricated zero meter', pageConfiguredConnections, '0% left')
+
+const copiedConnection = connectionSetupText(connectionCards[1])
+check('copied connection setup names the environment key', copiedConnection, 'GEMINI_API_KEY')
+check('copied connection setup names the official destination', copiedConnection, 'https://ai.google.dev/gemini-api/docs/api-key')
+nocheck('copied connection setup contains no credential value', copiedConnection, 'sk-')
 
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)
