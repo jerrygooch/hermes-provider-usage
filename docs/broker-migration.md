@@ -1,19 +1,22 @@
 # Brokered credential migration — Grok (xai-oauth)
 
-Status: **Grok is brokered; the rest of the built-in adapters are now migrated
-to public read-only core snapshots (see the update at the bottom).** The broker
+Status: **historical migration record**. The brokered xAI route is **optional** and is
+not required to install or run Provider Usage. Stock Hermes 0.23.1 does not broker
+`xai-oauth`, so the Grok row stays unavailable with the official account link; when a
+host does broker it, the plugin uses `credentialed_provider_request` and never reads a
+raw token. The rest of the built-in adapters use public read-only core snapshots and
+profile-scoped secret reads (see [stock-support.md](stock-support.md)). The broker
 remains a bounded, per-provider route — it is not a universal proxy.
 
-- Candidate: `C:/Users/jerry/projects/hermes-provider-usage-ext`
-  (branch `provider-extensibility`, existing dirty tree preserved).
-- Optional enhanced broker: `dbe0bcec0d6c3e84acd99c6cb0072561c84fa623`
+- Candidate: this repository checkout (branch `provider-extensibility` in the original
+  development tree).
+- Optional enhanced broker core commit:
+  `dbe0bcec0d6c3e84acd99c6cb0072561c84fa623`
   (`plugin requests: brokered xAI Grok sign-in, bytes bodies, URL hardening`).
-  It is **not required** to ship the plugin; stock `0.23.1` does not have the
-  `xai-oauth` route, so the row stays unavailable with the official Grok link.
-- Additive core seams (separate worktree, not the installed core):
-  `C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`,
-  current HEAD `a4c484eb5d` (includes `dbe0bcec0d`, `622eb3219f`, and the
-  cherry-picked delegation metadata `13152f4603`).
+  It is **not required** to ship the plugin.
+- Additive core seams live in an optional core checkout at
+  `/path/to/optional-hermes-checkout`. They are not the installed core and are not an
+  entry dependency.
 - No prerelease version was invented. `plugin.yaml` stays `0.10.0` and floors at
   the released stock baseline `>=0.23.1`; the broker and identity helpers are
   optional enhancements documented in `docs/stock-support.md`.
@@ -70,7 +73,7 @@ Preserved Grok data fields (covered by the new tests):
 New: `tests/test_brokered_provider_usage.py` — 10 tests.
 
 ```bash
-cd C:/Users/jerry/projects/hermes-provider-usage-ext
+cd /path/to/hermes-provider-usage-ext
 python -m unittest tests.test_brokered_provider_usage -v
 # Ran 10 tests ... OK
 ```
@@ -147,9 +150,8 @@ Core test evidence (run with the xAI worktree's dev venv because the new
 worktree has no `.venv`):
 
 ```bash
-cd C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams
-../xai-plugin-provider-requests/.venv/Scripts/python.exe -m pytest \
-  tests/agent/test_account_usage_provider_usage_seams.py -q
+cd /path/to/optional-hermes-checkout
+python -m pytest tests/agent/test_account_usage_provider_usage_seams.py -q
 # 4 passed
 
 ../xai-plugin-provider-requests/.venv/Scripts/python.exe -m pytest \

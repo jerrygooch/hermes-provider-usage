@@ -1,212 +1,153 @@
 # Hermes Provider Usage
 
-Provider Usage puts the account limit that matters beside the model you are using in Hermes Desktop. The status-bar chip stays compact. **Click it** to see the current provider's details in a popover, and **"View all providers"** opens a full page (like Settings) with every window, reset time, balance, and account detail.
+Your agent is only as useful as the account limit it can still spend. Provider Usage puts that limit beside the model you are already using in Hermes Desktop: a compact status-bar chip, a detail popover, and a full page for every provider and window.
 
-The plugin reports shared provider limits, not usage for one chat. If five sessions use the same Codex account, they all draw from the same allowance.
+**Click the chip** to see the active provider's governing windows, reset times, fallback balance, and account state. **View all providers** opens the full page, also reachable from the sidebar and the ⌘K palette.
 
-## Interface previews
+The plugin reports the **shared account resource** behind a provider. It does not divide a Codex, Claude, or OpenCode allowance between chats. Five sessions on one account all draw from the same pool.
 
-These images use sample data, rendered from the plugin's actual components (not hand-written mockups) with the built-in **Nous** desktop theme (dark mode): a real SDK-styled full page and the toolbar popover. No real account values appear. See `harness/` for the reproducible capture.
+## Look at it
+
+These images are **sample data rendered in a browser component harness** from the plugin's real components and SDK primitives with the built-in Nous dark theme. They are **not screenshots of the packaged Electron app**, and no real account values appear. See `harness/` for the reproducible capture.
 
 ![Provider Usage full page (sample data)](assets/provider-usage-page.png)
 
 ![Provider Usage toolbar popover (sample data)](assets/provider-usage-popover.png)
 
-*No real account information appears in these images.*
+More: the [12-shot gallery](assets/hackathon/gallery.html), [feature and trust-boundary infographic](assets/hackathon/infographic.png), [full demo](assets/hackathon/demo-full.mp4), and the [hackathon guide](docs/hackathon-guide.md) with the shot list, evidence tiers, and build notes.
 
 ## What it does
 
-- Adds a small active-provider meter to the bottom-right status area.
-- **Click the chip** → a popover shows the current provider's funding summary, governing meters, and reset times.
-- **"View all providers"** in that popover → a full Provider Usage page (Settings-style) with every window, balance, and account detail. Reachable too from the sidebar nav row and the ⌘K palette.
+- Adds a small active-provider meter to the Desktop status bar.
+- Shows every governing subscription window, not just the one that fits in the chip.
 - Keeps subscription allowances primary and paid fallback balances secondary.
-- Shows every governing window when a model has more than one limit.
-- Refreshes the page and status chip against the focused profile and session when switching profiles or bots.
+- Refreshes against the focused profile and session when you switch bots or profiles.
 - Keeps API keys and OAuth credentials in the Python backend.
-- Marks missing data as unavailable instead of filling gaps with guesses.
+- Marks missing data **Unavailable** or **Unknown** instead of filling gaps with guesses.
+- Adds a running-agents footer to the popover when the gateway reports live delegated children.
 
-A Spark session is a useful example. Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the page keeps both subscription meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
+A Spark session is the useful example: Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the page keeps both meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
 
 ### Don't see the chip?
 
-The chip lives in the Desktop **status bar** — the strip along the bottom of the window — and the bar can be hidden (a per-machine preference, not a Settings toggle). When it's hidden, every status readout goes with it, not just this plugin's. Bring it back with any of:
+The chip lives in the Desktop **status bar** at the bottom of the window, and that bar can be hidden as a per-machine preference. When it is hidden, every status readout disappears with it.
 
-- **Ctrl+Shift+S** — the "Toggle status bar" shortcut (⌘+Shift+S on macOS)
-- **Right-click anywhere in the app → View → Toggle status bar**
-- **Ctrl+K** / **⌘K** — the command palette, then search "Toggle status bar"
+- **Ctrl+Shift+S** (⌘+Shift+S on macOS) toggles the status bar.
+- Or right-click the app → **View → Toggle status bar**.
+- Or open the command palette and search **Toggle status bar**.
 
-If the bar is visible but the chip still isn't there, check that **Provider Usage** is enabled under **Settings → Plugins**, and that its backend is enabled for your profile (see [Install](#install)).
+If the bar is visible but the chip is not, check **Settings → Plugins** and confirm the backend is enabled for this profile (see [Install](#install)).
 
 ## Provider support
 
-| Provider | What the plugin can show |
-| --- | --- |
-| OpenAI Codex | Shared subscription windows, Spark-specific windows, resets, access state, and subdued extra-usage balance when returned |
-| OpenCode Go | 5-hour and weekly usage in the status chip; all three subscription windows, including monthly, in the page |
-| OpenCode Zen | Authenticated API-credit product state; wallet balance and spend remain unavailable because OpenCode does not expose them to API keys |
-| DeepSeek | API balance in the currency returned by DeepSeek |
-| OpenRouter | Remaining API credit balance |
-| SuperGrok / xAI OAuth | SuperGrok subscription quota and reset data returned by the Grok billing endpoint |
-| Ollama Cloud | Subscription windows (5-hour, weekly, and monthly credit usage, whichever the account reports) and per-model request counts |
-| Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it |
-| Claude / Anthropic | Always-listed card: Claude subscription limits through the existing Claude Code OAuth read; Anthropic API usage/admin access is a separate organization product and is not metered here |
-| Google Gemini API | Always-listed card: Gemini API key setup and documented per-project rate limits; no supported account balance/quota endpoint, so usage stays in Google AI Studio |
-| Z.ai / GLM | Always-listed card: GLM Coding Plan quota versus standard pay-as-you-go API billing, with global and China endpoints; no core account-usage hook, so no quota or credit is invented |
-| Declarative JSON | Any documented read-only HTTPS usage/balance endpoint you describe with the bundled schema (GitHub rate limits ship ready to use) |
+| Provider | What you get | Evidence |
+| --- | --- | --- |
+| OpenAI Codex | Shared subscription windows, Spark windows, resets, access state, subdued extra-usage balance, and banked-reset inventory when the host returns it | Stock compatibility tests |
+| OpenCode Go | 5-hour and weekly usage in the chip; all three subscription windows in the page | Stock compatibility tests |
+| OpenCode Zen | Authenticated API-credit product state; wallet balance stays unavailable because OpenCode does not expose it to API keys | Limited by the provider |
+| DeepSeek | API balance in the currency DeepSeek returns | Stock compatibility tests |
+| OpenRouter | Remaining API credit, key quota, and spend detail | Stock compatibility tests |
+| Ollama Cloud | Session, weekly, and monthly windows plus per-model request counts | Experimental endpoint; plans differ |
+| Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it | Host-dependent |
+| Claude / Anthropic | Always-listed card. Claude subscription limits through the existing Claude Code OAuth read; Anthropic API Admin usage is a separate organization product and is not metered here | Subscription read uses the existing core adapter; card is fixture-tested, **not live-verified in this release** |
+| Google Gemini API | Always-listed **setup and capability card**: API-key setup and documented per-project rate limits. No supported account balance/quota endpoint, so usage stays in Google AI Studio | **Setup only; no account adapter and no live account test** |
+| Z.ai / GLM | Always-listed **setup and capability card**: GLM Coding Plan quota versus standard pay-as-you-go billing, with global and China endpoints. Hermes has no `zai` account-usage hook, so no quota or credit is invented | **Setup only; no account adapter and no live account test** |
+| xAI / Grok | On stock Hermes 0.23.1 there is no xAI broker, so the row is unavailable with the official Grok dashboard link. Subscription credits appear only when the host brokers `xai-oauth` | Stock: link only; broker is optional |
+| Declarative JSON | Any fixed read-only HTTPS usage or balance endpoint you describe with the bundled schema; GitHub rate limits ship ready to use | Tested boundary and GitHub live check |
 
-OpenCode appears as one provider family in the popover/page, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.
+OpenCode is one family in the UI, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin never treats one as the other's balance.
 
-The **Claude / Anthropic**, **Google Gemini API**, and **Z.ai / GLM** cards are always listed, including with no credentials. They are connection and capability cards, not meters: an unconnected card says **Not connected**, and none of them invents a zero balance, remaining quota, or local spend total. Anthropic is the only one of the three with a supported account read today — the existing core Claude Code OAuth subscription snapshot. Anthropic API usage needs organization Admin API access and is not read here. Gemini API usage and prepay balance stay in Google AI Studio; Z.ai Coding Plan quota and standard API balance stay in Z.ai, because Hermes has no account-usage hook for `zai`.
+The **Claude / Anthropic**, **Google Gemini API**, and **Z.ai / GLM** cards are always listed, including with no credentials. They are connection and capability cards, not meters: an unconnected card says **Not connected**, and none of them invents a zero balance, remaining quota, or local spend total. Gemini and Z.ai have no account-usage read in this build; their numbers stay in the provider's own console.
 
-The Grok billing response used here exposes quota data but does not provide a trustworthy plan-tier name. The plugin therefore uses the conservative label **SuperGrok** and does not infer a higher tier.
+The Grok billing response exposes quota data but no trustworthy plan-tier name, so the plugin uses the conservative label **SuperGrok** and does not infer a higher tier.
 
-See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, limitations, and the selection rules.
+See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, selection rules, and the exact stock/enhanced split in [docs/stock-support.md](docs/stock-support.md).
 
-## How the chip chooses a meter
+## Reset credits, carefully
 
-1. Read the provider and model from the focused Hermes session.
-2. Use the applicable subscription allowance when one governs that model.
-3. Show every governing subscription window in the detailed page.
-4. Use paid extra usage or API credits only when a governing subscription window is exhausted or the product is credit-only.
-5. Preserve the provider's own currency, timestamps, and unavailable states.
+On a Codex row where the host exposes banked resets, **Banked reset credits** shows a read-only summary for the active signed-in account. **Preview reset** opens a separate confirmation block naming that account and the banked/applicable counts. Only the confirm button mutates, and it spends one subscription reset, never a paid API credit.
 
-The focused session selects the meter. It does not own a private quota.
+- There is no exact-credit selection: core picks the credit, and the API accepts **no credit selector, force flag, caller URL, or purchase flag**. There is no purchase action anywhere.
+- Success is reported only after an independent same-identity readback shows a lower banked count. A missing, unchanged, or mismatched readback is **uncertain**, not success, and is never retried automatically.
+- Core redemption is account-implicit, so the active-account binding is a **point-in-time re-check, not an atomic reservation**. With multiple pooled Codex credentials, a credential switch between preview and redeem cannot be excluded; the panel stays limited to the account Hermes currently resolves rather than offering a multi-account selector.
+
+No reset is redeemed by the tests, the harness, or the screenshots. The design record is [docs/reset-capabilities.md](docs/reset-capabilities.md).
+
+## Running agents
+
+When the popover is open and the gateway reports live delegated children, a subordinate footer lists them and, where an exact account identity is published, the shared pool they draw from. On stock 0.23.1 the provider/account identity inventory is often absent, so the footer shows an unknown account (or no footer) instead of borrowing another account's figure. It never divides usage per agent or invents a per-agent cost. Details: [docs/running-agents-footer.md](docs/running-agents-footer.md).
 
 ## Bring your own read-only usage API
 
-Provider Usage 0.10 adds **declarative definitions**: a versioned JSON file can describe a fixed read-only HTTPS endpoint and map its JSON into provider cards. It is data only — no scripts, `eval`, templates, arbitrary header values, or literal credentials.
+Provider Usage 0.10 supports **declarative definitions**: versioned JSON that describes a fixed read-only HTTPS endpoint and maps its JSON into provider cards. It is data only — no scripts, `eval`, templates, arbitrary headers, or literal credentials.
 
 Three definitions ship in the catalog:
 
-- **GitHub API rate limit** — works without a credential and shows the core, search, and GraphQL request windows for this machine or the configured token. This is a request rate limit, not a model-token allowance.
+- **GitHub API rate limit** — credential-free; core, search, and GraphQL request windows for this machine or the configured token.
 - **Moonshot / Kimi balance** — prepaid balance; references `MOONSHOT_API_KEY`.
 - **ElevenLabs subscription** — character allowance and reset; references `ELEVENLABS_API_KEY`.
 
-The page lists connected definitions, **Available to connect** entries that name the missing environment variable, **Requires approval** entries for profile-local files, **Blocked** entries whose approval no longer matches, and **Invalid definition** entries with the exact validation error. Missing mapped values stay **Unavailable** and are never shown as zero.
+The page distinguishes **Connected**, **Available to connect** (with the missing variable), **Requires approval**, **Blocked**, and **Invalid definition** states. Missing mapped values stay **Unavailable**, never zero.
 
-To add one:
-
-1. Copy `dashboard/definitions/TEMPLATE.json` to `$HERMES_HOME/provider-usage/providers/<id>.json` (for a named profile: `$HERMES_HOME/profiles/<profile>/provider-usage/providers/`).
-2. Use a documented HTTPS endpoint, list its host in `request.hosts`, and reference environment variables instead of embedding credentials.
-3. Map JSON paths into windows or balances. Supported window kinds are 5-hour, daily, weekly, monthly, rolling, and custom; values can be percent, requests, tokens, characters, USD, credits, or custom units.
-4. Validate locally, then approve the exact file for this Hermes home:
+To add one, start from `dashboard/definitions/TEMPLATE.json`, then:
 
 ```bash
 python scripts/validate_definition.py ~/.hermes/provider-usage/providers/my-api.json
 python scripts/approve_definition.py ~/.hermes/provider-usage/providers/my-api.json
 ```
 
-The approval command shows the destination and every credential reference, reads no secret, and requires you to type `approve`. It writes `$HERMES_HOME/provider-usage/approvals.json`, outside the definitions directory. Editing the definition changes its fingerprint and revokes the approval (**Blocked** until you review and approve it again). Nothing in a definition or in the packager can approve itself.
+Approval names the destination and every credential reference, reads no secret, and requires you to type `approve`. It writes `$HERMES_HOME/provider-usage/approvals.json`, outside the definitions directory. Editing the file changes its fingerprint and revokes approval until you review it again. Nothing in a definition or the packager can approve itself.
 
-A profile definition that reuses a bundled id is rejected unless it sets `"override": true`, and ids reserved by built-in adapters are refused. See [dashboard/definitions/README.md](dashboard/definitions/README.md) for the schema reference, approval rules, and safety boundaries.
+The boundary is HTTPS GET only, exact host allow-list, no redirects, a pinned public peer, and a bounded response. Credential *references* resolve only through Hermes' profile-scoped `agent.secret_scope.get_secret`; there is no `os.environ` fallback. See [dashboard/definitions/README.md](dashboard/definitions/README.md) for the schema and trust model.
 
-### What the definition boundary allows
-
-- **HTTPS GET only**, default port, no query string or credentials in the URL, exact host allow-list, no redirects. An authorization header is therefore never forwarded to another host.
-- **Pinned public peer** — the backend resolves the host once under a 3-second bound, rejects the whole answer if any address is loopback, private, link-local, reserved, multicast, NAT64, or IPv4-mapped, then connects to the vetted IP while keeping TLS SNI and the `Host` header set to the definition's hostname. A second DNS answer cannot move the connection. Proxy and `.netrc` discovery are disabled.
-- **Bounded response** — 512 KiB cap, 10-second per-read timeout, and a 20-second wall-clock budget checked across DNS and streaming.
-- **Credential references** resolved only through Hermes' profile-scoped `agent.secret_scope.get_secret`; the renderer receives labels, numbers, states, and provenance — never a key, token, or raw response. There is no `os.environ` fallback. `hermes_provider` references are rejected with an explicit "not supported yet" error; reusing a provider credential needs a code-owned adapter.
-- **Data-only dot paths**, strict unknown-key rejection, and a 30–86,400 second cache TTL. Cache keys and provenance are scoped by the effective canonical Hermes home, not the word `active`. The last good row can be shown as **Stale data** with the failure attached. Unmapped rows are omitted with a warning, and an unresolved currency is `UNKNOWN`, never assumed USD.
-
-### Trust model (honest)
-
-Approval is a **local-user consent boundary**, not a sandbox. Code running as the same OS user can edit both the definition and `approvals.json`; it can also read the profile's credentials directly. The gate exists so a definition that arrives from a pack, an update, or another tool cannot send a profile secret to an unreviewed host without a human seeing the destination and references first. It does not defend against malicious same-user code, a compromised Hermes process, or an attacker who can already write the profile directory.
-
-Complex protocols still need a Python adapter: OAuth refresh, gRPC, HTML scraping, write operations, and multi-step requests are intentionally out of scope.
-
-### Prepare a portable definition
-
-The packaging script validates, canonicalizes, and rejects secret-looking values and machine-local paths. It writes a small package under `dist/contributions/<id>/` and never calls GitHub. A package never contains an approval record and does not approve anything on install; the receiving user must run `scripts/approve_definition.py` locally.
-
-```bash
-python scripts/package-definition.py ~/.hermes/provider-usage/providers/my-api.json
-```
-
-Review the package, then open a catalog pull request manually. No automatic publication is performed.
-
-## Architecture
-
-```text
-Hermes Desktop plugin                Hermes Python plugin
-(no credentials)                     (credential boundary)
-────────────────────────             ─────────────────────────────
-status chip and detail popover/page   ───▶   normalized provider overview
-focused provider/model        ◀───   limits, balances, resets, state
-```
-
-The renderer never receives API keys, OAuth tokens, authorization headers, or raw credential objects. Provider requests run in the backend through the credentials already configured in Hermes.
+Approval is a **local consent boundary, not a sandbox**. Code running as the same OS user can edit both the definition and the approval record, and can read profile credentials directly. It prevents an unreviewed definition from using a profile secret without a human seeing the destination first; it does not defend against malicious same-user code or a compromised Hermes process.
 
 ## Install
 
-A current Hermes Desktop build and a local Hermes gateway are required.
+Requirements: **stock Hermes Desktop 0.23.1 or newer**, a local Hermes gateway, and a current Desktop build. No core patch, private worktree, or unmerged core commit is required.
 
 ```bash
-export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-
-mkdir -p "$HERMES_HOME/desktop-plugins/provider-usage"
-cp desktop/plugin.js "$HERMES_HOME/desktop-plugins/provider-usage/plugin.js"
-
-mkdir -p "$HERMES_HOME/plugins/provider-usage/dashboard"
-cp dashboard/plugin_api.py dashboard/reset_service.py dashboard/manifest.json \
-  "$HERMES_HOME/plugins/provider-usage/dashboard/"
-cp -R dashboard/definitions "$HERMES_HOME/plugins/provider-usage/dashboard/"
-cp -R dashboard/dist "$HERMES_HOME/plugins/provider-usage/dashboard/"
-
-# The local approval/validation commands ship beside the backend so an
-# installed copy can approve profile-local definitions without a source tree.
-mkdir -p "$HERMES_HOME/plugins/provider-usage/scripts"
-cp scripts/approve_definition.py scripts/validate_definition.py \
-  "$HERMES_HOME/plugins/provider-usage/scripts/"
+hermes plugins install jerrygooch/hermes-provider-usage
 ```
 
-Check the current plugin allow-list first:
+The unified package ships both halves: the Desktop UI and the profile backend. Hermes installs it under the profile and Desktop loads the Desktop half. The installer confirms before enabling. Add `--enable` to skip that prompt, or enable later:
 
 ```bash
-hermes config get plugins.enabled
+hermes plugins enable provider-usage
 ```
 
-Then run `hermes config set plugins.enabled` with the current entries plus `provider-usage`. Do not replace an existing list with the plugin name alone. Recycle the target Hermes gateway after changing the backend allow-list. In Desktop, enable **Provider Usage** under **Settings → Plugins** if it appears as opt-in. If the chip doesn't appear after install, make sure the status bar itself is visible — see [Don't see the chip?](#dont-see-the-chip).
+For a reproducible install, pass an exact 40-character commit:
 
-### Backend is per profile
+```bash
+hermes plugins install jerrygooch/hermes-provider-usage --ref <40-character-commit-sha>
+```
 
-The Python backend (`dashboard/plugin_api.py`) is a **per-profile** install: it loads only when `provider-usage` is in that profile's `plugins.enabled` and its backend folder exists under that profile's `~/.hermes/profiles/<profile>/plugins/provider-usage/dashboard/`. A profile without the backend returns HTTP 404 for `/overview`, and the plugin says exactly that — **"Provider usage isn't enabled or installed in <profile>"** — on both the page and the toolbar chip. It never auto-enables or auto-installs the backend, and never edits a real profile. If you use more than one profile, install and enable the backend in each profile where you want a usage readout.
+Recycle that profile's gateway after install. Do **not** copy files into Hermes core, apply a core patch, or hand-edit the profile plugin folder.
 
-## Profile scoping & focus divergence
+**Per profile.** The Python backend loads only in the profile where `provider-usage` is enabled. Run the install once for each profile that should expose usage; installing in one profile does not enable or modify another. The plugin never auto-enables or auto-installs into a profile. A profile without the backend returns `/overview` 404, and both the page and chip say **"Provider usage isn't enabled or installed in &lt;profile&gt;."**
 
-`ctx.rest` reaches the **active** socket's profile and connection, never the focused chat's. The plugin treats a focused session as readable only when its connection-qualified owner (the SDK's `focusedSessionOwner` atom) matches that active source. When a focused chat belongs to a different profile or connection (or the SDK reports the focus as ambiguous), the plugin **fails closed**: the page and chip gate with "The focused chat is in … — switch to view its usage" and issue no fetch or probe for a foreign account — home-account rows are never shown under another account's focus, even when two sources share a profile name. On return to a matching profile, the cached rows for that account come back.
+Optional host helpers — exact account identity inventory, provider credential summary, banked-reset details, or the xAI broker — are detected at runtime. Their absence changes one row or one value to **Unavailable**; it does not disable the plugin.
+
+## Profile scoping and focus divergence
+
+`ctx.rest` reaches the **active** socket's profile and connection, never the focused chat's. The plugin treats a focused session as readable only when its connection-qualified owner matches that active source. When a focused chat belongs to another profile or connection, or the SDK reports the focus as ambiguous, the surfaces fail closed with **"The focused chat is in … — switch to view its usage"** and issue no fetch or probe for a foreign account. Home-account rows are never shown under another account's focus. On return to a matching profile, cached rows come back.
 
 ## Development
 
-The shipped plugin file (`desktop/plugin.js`) is plain ESM with **no runtime npm dependencies**, but the dev/test toolchain does: `package.json` declares `devDependencies` `jsdom`, `react`, and `react-dom`, and the real-browser harness (see `harness/README.md`) bundles the plugin with the Hermes desktop SDK source for a faithful component render.
+The shipped `desktop/plugin.js` is plain ESM with no runtime npm dependencies. The development harness adds `jsdom`, `react`, and `react-dom`; the browser harness bundles the plugin with the Hermes desktop SDK source for a faithful component render.
 
 ```bash
-npm ci          # install the devDependencies (jsdom, react, react-dom)
-npm run check   # plugin syntax + jsdom/render/scope/lifecycle + Python definition tests + catalog validation
-# or
+npm ci
+npm run check          # syntax, Node suites, Python suites, definitions, py_compile
 bash scripts/validate.sh
 ```
 
-The browser component harness (real Chromium/Edge, real SDK primitives, per-fixture PNG evidence + a lifecycle assertion for the profile round-trip) is separate:
+The browser evidence is separate and uses real Chromium/Edge with real SDK primitives:
 
 ```bash
 node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
-# The toolbar chip → popover interaction (click opens; "View all providers" present)
-# is asserted by popover-verify against the REAL Tip component, so trigger-wiring
-# regressions fail the harness instead of passing through a lenient double:
 node harness/popover-verify.mjs
 ```
-
-The fixture suite covers:
-
-- shared Pro Codex limits;
-- Spark's 5-hour and weekly limits;
-- the Plus 5-hour window;
-- DeepSeek API balances;
-- OpenCode Go's compact 5-hour/weekly chip and complete three-window page;
-- separate OpenCode Go and Zen funding semantics;
-- SuperGrok's conservative plan label;
-- paid fallback after subscription exhaustion;
-- declarative GitHub windows plus the available/invalid catalog states.
 
 The live GitHub rate-limit definition can be checked without credentials:
 
@@ -214,31 +155,25 @@ The live GitHub rate-limit definition can be checked without credentials:
 python scripts/live-check-github.py
 ```
 
-The definition schema is documented in [dashboard/definitions/README.md](dashboard/definitions/README.md). Local development packages are produced with `python scripts/package-definition.py`; the script never publishes.
+The fixture suite covers shared Codex limits, Spark windows, Plus 5-hour usage, DeepSeek balances, OpenCode Go/Zen funding semantics, SuperGrok's conservative label, paid fallback after exhaustion, and declarative catalog states. The Node and Python suites are automated tests, not live-account proof: the Claude, Gemini, and Z.ai cards were not exercised against real accounts in this release.
 
-## Security
+## Status and limits
 
-Do not add `.env`, `auth.json`, `config.yaml`, screenshots containing account details, request dumps, or copied provider responses to this repository. Those files are ignored where practical, but the ignore file is a guardrail rather than permission to skip review.
+Provider Usage 0.10 is an experimental plugin. Provider account APIs change without notice, especially OAuth and web-app endpoints; experimental adapters are labelled in the support table rather than presented as permanent integrations. Stable documented APIs are preferred, and missing data stays missing.
 
-Before publication, the repository is checked for credential-shaped values, authorization material, machine-local paths, generated caches, and unexpected files. The plugin itself is read-only: it reports limits and balances, and it cannot buy credits or enable paid usage.
+The plugin is read-only for usage. The only mutation is the separately gated Codex banked-reset action described above; it cannot buy credits, enable paid usage, change a plan, or purchase a reset. The Desktop renderer never receives API keys, OAuth tokens, authorization headers, or raw credential objects; provider requests run in the backend.
 
-## Status
-
-Provider Usage 0.10 is an experimental plugin. Provider account APIs can change without notice, especially OAuth and web-app endpoints. Stable documented APIs are preferred; experimental adapters are identified in the support table rather than presented as permanent integrations. Declarative definitions cover simple documented read-only APIs; everything else still needs a reviewed Python adapter.
-
-See [docs/hackathon-readiness.md](docs/hackathon-readiness.md) for the local verification evidence, honest gaps, and the short demo outline.
+No security review can promise more than its boundary. This one is a reviewed local consent and credential-isolation design with documented residual risks, not an unlimited guarantee.
 
 ## Help wanted
 
-We would love help with this one. The most useful contributions are:
+- Adapters for more providers, backed by a real account-level usage or balance source.
+- Testing across plans and account types without sharing private data.
+- Hermes-native UI work, accessibility fixes, and visual polish.
+- Fixtures for model-specific limits and unusual reset behavior.
+- Documentation of provider quirks and honest unavailable states.
 
-- adapters for more providers, backed by a real account-level usage or balance source;
-- testing across different plans and account types without sharing private account data;
-- Hermes-native UI work, accessibility fixes, and visual polish;
-- fixtures for model-specific limits and unusual reset behavior;
-- documentation for provider quirks and honest unavailable states.
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Never attach API keys, OAuth tokens, raw provider responses, account screenshots, or request logs to an issue.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Never attach API keys, OAuth tokens, raw provider responses, account screenshots, or request logs to an issue.
 
 ## License
 

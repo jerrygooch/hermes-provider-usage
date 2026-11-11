@@ -1,0 +1,459 @@
+{
+  "schema": "hermes.provider-usage.hackathon-assets/1",
+  "title": "Provider Usage \u2014 hackathon visual and documentation package",
+  "plugin_version": "0.10.0",
+  "source_commit": "fd895ea",
+  "source_tree_dirty": false,
+  "generated_at": "2026-11-11T19:52:53.471285+00:00",
+  "capture_kind": "browser component harness (real desktop/plugin.js + real SDK primitives + real built-in theme); not the packaged desktop app",
+  "theme": {
+    "name": "nous",
+    "mode": "dark"
+  },
+  "honesty": {
+    "sample_data": true,
+    "live_desktop_app": false,
+    "stock_hermes_desktop": true,
+    "requires_hermes": ">=0.23.1",
+    "release_capture_status": "frozen production source; final browser-component capture",
+    "unmerged_core_patch_required": false,
+    "reset_redeemed": false,
+    "source_tree_note": "Captured from a clean working tree at the recorded HEAD.",
+    "packaged_desktop_app_captured": false,
+    "statement": "Screenshots render the real plugin components and SDK primitives in a browser component harness. The plugin targets stock Hermes Desktop; optional provider metadata is capability-detected and shown as unavailable with provider dashboard links when absent. These are not packaged-app screenshots or live provider reads."
+  },
+  "counts": {
+    "screenshots": 12,
+    "infographics": 1,
+    "videos": 1,
+    "video_posters": 1,
+    "gallery_pages": 1,
+    "total_assets": 16
+  },
+  "checks": {
+    "png_metadata_stripped": true,
+    "dimensions_match_css_at_2x": true,
+    "inner_scroll_issues": 0,
+    "captures_with_text_assertions": 12,
+    "screenshots_unique_and_counted": true,
+    "provider_cards_all_present": true,
+    "popular_cards_geometry_verified": true,
+    "reset_preview_only": true,
+    "video_recorded": true,
+    "video_audio_streams": 0,
+    "video_poster_present": true
+  },
+  "screenshots": [
+    {
+      "id": "01-status-chip",
+      "file": "screenshots/01-status-chip.png",
+      "title": "Provider Usage \u2014 status-bar chip (sample data)",
+      "state": "Toolbar chip trigger \u00b7 subscription provider",
+      "width": 274,
+      "height": 104,
+      "bytes": 3745,
+      "sha256": "3ac556fcf094e0409118f2f1f9ed0541691bc650359177d5edb6e98cf5c0d980",
+      "caption": "The status-bar chip is the always-on entry point. It shows the active provider and the governing subscription windows, not a private chat quota.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "chip-button",
+        "css_width": 137.17,
+        "css_height": 52,
+        "rendered_text_assertions": [
+          "Codex",
+          "wk 84%"
+        ],
+        "geometry": {
+          "ariaHasPopup": "dialog",
+          "ariaExpanded": "false"
+        }
+      }
+    },
+    {
+      "id": "02-popover-current",
+      "file": "screenshots/02-popover-current.png",
+      "title": "Provider Usage \u2014 current provider popover (sample data)",
+      "state": "Popover \u00b7 current provider detail",
+      "width": 808,
+      "height": 813,
+      "bytes": 41089,
+      "sha256": "8db46806b7ff006cfb52719b9cb71c758b90283a67365d45e56bc349fbe2d37a",
+      "caption": "Clicking the chip opens the current provider\u2019s detail popover: every governing window, reset time, and any paid fallback balance.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "popover",
+        "css_width": 404,
+        "css_height": 406.58,
+        "rendered_text_assertions": [
+          "View all providers",
+          "5-hour",
+          "Weekly",
+          "62% left"
+        ],
+        "geometry": {
+          "scrollHeight": 357,
+          "clientHeight": 357,
+          "scrollTop": 0
+        }
+      }
+    },
+    {
+      "id": "03-popover-running-agents",
+      "file": "screenshots/03-popover-running-agents.png",
+      "title": "Provider Usage \u2014 running agents footer (sample data)",
+      "state": "Popover footer \u00b7 verified pool and unknown account",
+      "width": 808,
+      "height": 720,
+      "bytes": 53766,
+      "sha256": "fa910fc805856c2de7802a5b7dae10c5cd856d23a59bb291c520d55e8e1b6785",
+      "caption": "The footer attributes only what the gateway can prove. A child with a matching account shows the shared pool (5h 62%); a mismatched or missing account shows an em dash instead of borrowing another account\u2019s balance.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "popover",
+        "css_width": 404,
+        "css_height": 359.98,
+        "rendered_text_assertions": [
+          "Running agents",
+          "5h 62%",
+          "\u2014",
+          "provider not reported"
+        ],
+        "geometry": {
+          "scrollHeight": 310,
+          "clientHeight": 310,
+          "scrollTop": 0,
+          "runningAgents": "Running agents\n3 agents\ngpt-5.6-codex\n\u00b7 OpenAI Codex \u00b7 Codex Pro \u00b7 sample\n5h 62%\ngpt-5.6-codex\n\u00b7 OpenAI Codex\n\u2014\nqwen3-coder:480b\n\u00b7 provider not reported\n\u2014"
+        }
+      }
+    },
+    {
+      "id": "04-overview-multi-provider",
+      "file": "screenshots/04-overview-multi-provider.png",
+      "title": "Provider Usage \u2014 full page, multiple providers (sample data)",
+      "state": "Full page \u00b7 subscription and credit providers",
+      "width": 1520,
+      "height": 2053,
+      "bytes": 128057,
+      "sha256": "b5da4da8a87914d7bf59310ada7bfba1471d4174dcc348d93c7fa8a49d66a72f",
+      "caption": "The full page keeps subscription windows and credit balances together: the active Codex allowance, DeepSeek API credit, OpenCode Go, Ollama Cloud, and an xAI sample row. On stock 0.23.1 the xAI row shows an official account link instead of credits.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "pane-full",
+        "css_width": 760,
+        "css_height": 1026.28,
+        "rendered_text_assertions": [
+          "Provider usage",
+          "OTHER PROVIDERS",
+          "DeepSeek",
+          "OpenCode",
+          "$8.72"
+        ],
+        "geometry": null
+      }
+    },
+    {
+      "id": "05-overview-expanded-metrics",
+      "file": "screenshots/05-overview-expanded-metrics.png",
+      "title": "Provider Usage \u2014 expanded active-provider metrics (sample data)",
+      "state": "Expanded metrics \u00b7 activity, cache, rates, pool breakdown",
+      "width": 1520,
+      "height": 2272,
+      "bytes": 173509,
+      "sha256": "a0a0e19d85586ff2e53e941abd7a4149e95b744d2375df8419c7a963403e2ce9",
+      "caption": "When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, published token rates, and the shared-pool breakdown. Not every provider returns every field.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "active-section",
+        "css_width": 760,
+        "css_height": 1135.84,
+        "rendered_text_assertions": [
+          "Activity",
+          "Prompt cache",
+          "Rates",
+          "Usage breakdown",
+          "2,840 requests"
+        ],
+        "geometry": null
+      }
+    },
+    {
+      "id": "06-popular-connections",
+      "file": "screenshots/06-popular-connections.png",
+      "title": "Provider Usage \u2014 popular provider connection cards (sample data)",
+      "state": "Popular provider cards \u00b7 Claude, Gemini, Z.ai",
+      "width": 1520,
+      "height": 3119,
+      "bytes": 415259,
+      "sha256": "6851f4b5e27819cd70ed4fb0365efdc4d0243c1908e7dae348c595f371d86f26",
+      "caption": "Three always-listed connection cards separate subscription quota from API billing. They report credential presence and supported read paths only; an unconnected card says so instead of showing an invented zero.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "popular-section",
+        "css_width": 760,
+        "css_height": 1559.28,
+        "rendered_text_assertions": [
+          "Popular providers",
+          "Claude / Anthropic",
+          "Google Gemini API",
+          "Z.ai / GLM",
+          "No balance or quota is inferred."
+        ],
+        "geometry": {
+          "cardCount": 3,
+          "cards": [
+            {
+              "label": "Claude / Anthropic",
+              "found": true,
+              "x": 18,
+              "y": 612.23,
+              "width": 724,
+              "height": 460.75,
+              "insideSection": true
+            },
+            {
+              "label": "Google Gemini API",
+              "found": true,
+              "x": 18,
+              "y": 1080.98,
+              "width": 724,
+              "height": 459.75,
+              "insideSection": true
+            },
+            {
+              "label": "Z.ai / GLM",
+              "found": true,
+              "x": 18,
+              "y": 1548.73,
+              "width": 724,
+              "height": 543.03,
+              "insideSection": true
+            }
+          ],
+          "cardsDistinct": true
+        }
+      }
+    },
+    {
+      "id": "07-catalog-available",
+      "file": "screenshots/07-catalog-available.png",
+      "title": "Provider Usage \u2014 available to connect cards (sample data)",
+      "state": "Catalog \u00b7 available to connect",
+      "width": 1520,
+      "height": 825,
+      "bytes": 99422,
+      "sha256": "ecc21857981fe4534542b3956677da97566323923b9943d754ec46067c1814f0",
+      "caption": "Read-only JSON definitions that ship in the catalog appear as Available to connect and name the exact missing environment variable. A card is setup guidance, not a live account test.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "catalog-section",
+        "css_width": 760,
+        "css_height": 412.66,
+        "rendered_text_assertions": [
+          "Provider definitions",
+          "Available to connect",
+          "MOONSHOT_API_KEY",
+          "ELEVENLABS_API_KEY"
+        ],
+        "geometry": {
+          "cardCount": 2
+        }
+      }
+    },
+    {
+      "id": "08-catalog-trust",
+      "file": "screenshots/08-catalog-trust.png",
+      "title": "Provider Usage \u2014 approval, blocked, unknown states (sample data)",
+      "state": "Catalog \u00b7 approval and blocked states",
+      "width": 1520,
+      "height": 2211,
+      "bytes": 222759,
+      "sha256": "d20d805768cd6fe4a3f7352de2bc5c5d6881800e03e0672b97c8ebc7d96ea3df",
+      "caption": "Profile-local definitions stay untrusted until a human approves that exact content. Editing the file, a mismatched approval record, or an unrecognized backend state is shown explicitly; nothing is fetched or invented.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "catalog-section",
+        "css_width": 760,
+        "css_height": 1105.47,
+        "rendered_text_assertions": [
+          "Approval required",
+          "Blocked",
+          "Unknown state",
+          "Unverified mapping"
+        ],
+        "geometry": {
+          "cardCount": 6
+        }
+      }
+    },
+    {
+      "id": "09-catalog-invalid",
+      "file": "screenshots/09-catalog-invalid.png",
+      "title": "Provider Usage \u2014 invalid definition errors (sample data)",
+      "state": "Catalog \u00b7 invalid definition",
+      "width": 1472,
+      "height": 362,
+      "bytes": 33345,
+      "sha256": "bd45c38ac4fb3412d7475f9b4b501756a515402b675d2c9e3c3d792de7634cfb",
+      "caption": "An invalid profile definition keeps its exact schema errors visible, so the fix is actionable instead of a silent empty card.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "invalid-card",
+        "css_width": 736,
+        "css_height": 181.11,
+        "rendered_text_assertions": [
+          "Invalid definition",
+          "mapping.windows[0].label",
+          "must include the request host"
+        ],
+        "geometry": null
+      }
+    },
+    {
+      "id": "10-narrow-420",
+      "file": "screenshots/10-narrow-420.png",
+      "title": "Provider Usage \u2014 narrow responsive pane (sample data)",
+      "state": "Narrow layout \u00b7 420px pane",
+      "width": 840,
+      "height": 2266,
+      "bytes": 124541,
+      "sha256": "54cd8680a1e6dcf8e5aaa73b992297d225885c9a20d9ebcd93d07d6d818929ef",
+      "caption": "At a 420px pane width the plugin\u2019s own layout stacks meters and provider cards without changing the data or hiding a reset.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "pane-full",
+        "css_width": 420,
+        "css_height": 1133.2,
+        "rendered_text_assertions": [
+          "Provider usage",
+          "5-hour",
+          "OTHER PROVIDERS"
+        ],
+        "geometry": null
+      }
+    },
+    {
+      "id": "11-reset-summary",
+      "file": "screenshots/11-reset-summary.png",
+      "title": "Provider Usage \u2014 banked reset summary (sample data)",
+      "state": "Codex reset \u00b7 read-only summary",
+      "width": 1520,
+      "height": 2487,
+      "bytes": 203276,
+      "sha256": "d3d4a3f5811b07289f0d9e251d568957e5dac2711a16134171cc923b7c707f82",
+      "caption": "The stock-native reset panel reads the active Codex account only. This is a fixture summary: 2 banked resets, 1 usable now, with provider-reported inventory. No reset was redeemed.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "active-section",
+        "css_width": 760,
+        "css_height": 1243.34,
+        "rendered_text_assertions": [
+          "Banked reset credits",
+          "Resets available",
+          "Active account: Codex Pro \u00b7 sample",
+          "2 banked resets are available",
+          "Preview reset"
+        ],
+        "geometry": null
+      }
+    },
+    {
+      "id": "12-reset-confirm",
+      "file": "screenshots/12-reset-confirm.png",
+      "title": "Provider Usage \u2014 reset confirmation preview (sample data)",
+      "state": "Codex reset \u00b7 confirmation preview, not executed",
+      "width": 1520,
+      "height": 2625,
+      "bytes": 220410,
+      "sha256": "0261c7a64a1e0c12341ddf029d9bc2aa775e4a4878d918a807217ebf38f87f48",
+      "caption": "Preview/confirm is separately gated. This fixture stops at the confirmation preview; the confirm button is visible but was never clicked, and no reset was redeemed.",
+      "sample_data": true,
+      "capture": {
+        "kind": "browser component harness",
+        "target": "active-section",
+        "css_width": 760,
+        "css_height": 1312.63,
+        "rendered_text_assertions": [
+          "Confirm Codex Pro \u00b7 sample",
+          "2 banked; 1 usable now",
+          "Confirm reset on Codex Pro \u00b7 sample",
+          "This spends one banked reset"
+        ],
+        "geometry": null
+      }
+    }
+  ],
+  "infographic": {
+    "file": "infographic.png",
+    "width": 1660,
+    "height": 1585,
+    "bytes": 639757,
+    "sha256": "817ad1c02262d3dce3332fa5133bb88f72c3d5096cd0013fbd33d72dbf5734d8",
+    "alt": "Diagram-only Provider Usage feature and trust-boundary infographic",
+    "sample_data_note": "Conceptual diagram drawn from source; contains no application screenshots."
+  },
+  "gallery": {
+    "file": "gallery.html",
+    "bytes": 16140,
+    "sha256": "41361db5bf4d3dbbd0b962ef1e097782da216abf10aa746912883bc3c9822579"
+  },
+  "video": {
+    "file": "demo-full.mp4",
+    "bytes": 4667189,
+    "sha256": "3bd8ceddb7598dd53e7b4b4cff71dbd71de2d49f749b15db503abd47faf757eb",
+    "label": "Real plugin interaction demo in the component harness; synthetic sample data; not the packaged desktop app. No reset redeemed.",
+    "sample_data": true,
+    "width": 1920,
+    "height": 1080,
+    "codec": "h264",
+    "fps": "30/1",
+    "duration_seconds": 83.23,
+    "audio_streams": 0,
+    "poster": "demo-full-poster.png"
+  },
+  "video_poster": {
+    "file": "demo-full-poster.png",
+    "width": 1920,
+    "height": 1080,
+    "bytes": 487522,
+    "sha256": "e3a4fb6c331188f30594eca6e25d538a7da1ac830bbbe82ebb0dbe156a868b75",
+    "sample_data": true
+  },
+  "provider_cards": {
+    "expected": [
+      {
+        "label": "Claude / Anthropic",
+        "present": true,
+        "id": "anthropic"
+      },
+      {
+        "label": "Google Gemini API",
+        "present": true,
+        "id": "gemini"
+      },
+      {
+        "label": "Z.ai / GLM",
+        "present": true,
+        "id": "zai"
+      }
+    ],
+    "all_present": true,
+    "status": "included"
+  },
+  "notes": [
+    "All provider names, balances, windows, reset times, model names, and account labels are synthetic sample data.",
+    "Provider Usage targets stock Hermes Desktop 0.23.1+. Optional identity, reset, and delegated-owner metadata is capability-detected; when absent, the UI shows Unavailable/Unknown and provider dashboard links instead of a guessed value.",
+    "These are pre-freeze component-harness captures; final stock captures wait on the frozen build. Some optional-row sample states (for example xAI subscription data) are only available on a host exposing the optional helper.",
+    "The screenshots exercise a real chip -> popover interaction and the real renderer; they do not prove packaged-app integration or live provider calls."
+  ]
+}

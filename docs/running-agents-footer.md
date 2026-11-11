@@ -1,5 +1,11 @@
 # Running agents footer (provider usage popover)
 
+Status: **design and verification record**. On stock Hermes 0.23.1 the gateway does not
+publish the exact `provider_account_id` inventory, so a live footer can show the child's
+provider but not a verified account; it renders an unknown account or no footer rather
+than borrowing a number. Newer hosts that expose the optional identity helpers get exact
+attribution automatically. Those helpers are not required to install Provider Usage.
+
 A small, subordinate footer inside the existing bottom-left provider-usage chip
 popover. It lists the delegated children **currently running in this chat**, and
 — only when the backend publishes and the account inventory verifies them — the
@@ -118,15 +124,11 @@ Deliberately **not** used:
 
 ## Seam status and account-inventory contract
 
-The core metadata + account-identity seam exists in the isolated core checkout
-`C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`,
-current HEAD `a4c484eb5d`: delegation registry, `subagent.list` projection,
-pydantic contract, generated OpenRPC/TS, the provider-usage fetchers/identities
-from `622eb3219f`, and the cherry-picked `13152f4603` metadata. It is **not
-installed** in the live Hermes tree, and this change did not install/restart
-anything. The installed `0.23.1` backend publishes no
+The core metadata + account-identity seam exists in an optional, isolated core checkout
+(now proposed upstream; not installed here). It is **not required** and is **not
+installed** in the live Hermes tree. The stock `0.23.1` backend publishes no
 `provider`/`provider_account_id`, so a real footer still shows “provider not
-reported” until that checkout (or a release containing it) is installed.
+reported” until a host release containing that optional seam is installed.
 
 The plugin side is now wired. `/overview` adds, for providers with known
 non-secret identities:
@@ -179,9 +181,9 @@ All commands run from the repository root. Tiers are separate evidence:
   `--fixture compact-5h-wk` proves a fixture with no children renders **no**
   footer. The running-agents fixture is **synthetic fixture data**, not proof
   that a live backend publishes these fields.
-- **Live desktop:** not run for this change (no install/restart was authorized).
-  The live `subagent.list` contract was read from the installed source at
-  `C:/Users/jerry/AppData/Local/hermes/hermes-agent/tui_gateway/methods_subagents.py`.
+- **Live desktop:** not run for this change (no install/restart was authorized). The live
+  `subagent.list` contract was read from the installed Hermes source at
+  `<hermes-install>/tui_gateway/methods_subagents.py`.
 
 ## Privacy / safety
 

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Provider Usage — screenshot gallery (sample data)</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3;
+    --muted: #7d8590; --faint: #6e7681; --accent: #4a84fe; --warn: #d29922;
+    --sans: "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --mono: "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body { font-family: var(--sans); }
+  main { width: 830px; max-width: 100%; margin: 0 auto; padding: 38px 24px 54px; }
+  .eyebrow { color: var(--accent); font: 650 11px/1.2 var(--sans); letter-spacing: .15em; text-transform: uppercase; }
+  h1 { margin: 12px 0 0; font: 650 34px/1.12 var(--sans); letter-spacing: -.025em; }
+  .lede { margin: 12px 0 0; color: #b9c1ca; font: 400 15px/1.55 var(--sans); }
+  .banner { display: flex; align-items: flex-start; gap: 10px; margin-top: 20px; padding: 12px 14px; border: 1px solid #4a3a11; border-radius: 8px; background: #1d1708; color: #e3b341; font: 600 12px/1.5 var(--sans); }
+  .banner b { color: #f0c75e; }
+  .toc { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+  .toc a { color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; font: 500 10.5px/1 var(--mono); }
+  .toc a:hover { color: var(--text); border-color: #4a84fe; }
+  h2 { margin: 38px 0 14px; padding-top: 16px; border-top: 1px solid var(--border); font: 650 14px/1.3 var(--sans); letter-spacing: .10em; text-transform: uppercase; color: var(--muted); }
+  figure { margin: 0 0 34px; }
+  .frame { border: 1px solid var(--border); border-radius: 10px; background: #010409; overflow: hidden; }
+  .frame img { display: block; width: 100%; height: auto; }
+  .frame-small { width: 360px; max-width: 100%; margin: 0 auto; padding: 18px; }
+  .frame-small img { width: 274px; }
+  .video-frame { border: 1px solid var(--border); border-radius: 10px; background: #010409; overflow: hidden; }
+  .video-frame a { display: block; position: relative; }
+  .video-frame img { display: block; width: 100%; height: auto; }
+  .play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; padding-left: 3px; color: var(--text); background: rgba(13,17,23,.82); border: 1px solid var(--accent); font: 600 18px/1 var(--sans); }
+  .video-meta { margin-top: 7px; color: var(--faint); font: 500 10px/1.5 var(--mono); }
+  .video-meta a { color: var(--muted); }
+  figcaption { padding-top: 10px; }
+  .cap-head { display: flex; align-items: baseline; gap: 9px; }
+  .cap-num { color: var(--accent); font: 650 11px/1 var(--mono); }
+  .cap-head strong { font: 650 15px/1.35 var(--sans); }
+  figcaption p { margin: 5px 0 0; color: var(--muted); font: 400 12.5px/1.55 var(--sans); }
+  .cap-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; color: var(--faint); font: 500 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+  .cap-meta span + span::before { content: "·"; margin-right: 7px; color: var(--border); }
+  .notes { margin-top: 36px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 16px 18px; }
+  .notes h3 { margin: 0 0 8px; font: 650 13px/1.3 var(--sans); }
+  .notes p, .notes li { color: var(--muted); font: 400 12.5px/1.55 var(--sans); }
+  .notes ul { margin: 0; padding-left: 17px; }
+  .notes li + li { margin-top: 5px; }
+  footer { margin-top: 26px; color: var(--faint); font: 500 10px/1.55 var(--mono); }
+  code { font-family: var(--mono); color: #b9c1ca; }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Hermes Desktop · Provider Usage 0.10</div>
+  <h1>Provider Usage — screenshot gallery</h1>
+  <p class="lede">Real plugin components, real SDK primitives, real <code>nous</code> dark theme. Every value below is synthetic sample data. These are component-harness captures, not screenshots of the packaged Electron desktop app.</p>
+  <div class="banner"><span><b>Read this first:</b> the screenshots are evidence of renderer behavior and the chip → popover interaction. They do not prove a live provider call or a packaged-app install. The plugin targets stock Hermes Desktop; optional provider capabilities are detected at runtime and shown as unavailable with dashboard links when absent. These are pre-freeze captures; final release captures wait on the frozen stock build.</span></div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#demo">demo.mp4</a>
+    <a href="#01-status-chip">The three surfaces</a><a href="#04-overview-multi-provider">The provider page</a><a href="#11-reset-summary">Banked reset credits</a><a href="#06-popular-connections">Popular provider cards</a><a href="#07-catalog-available">Definitions and trust states</a><a href="#10-narrow-420">Responsive layout</a>
+    <a href="manifest.json">manifest.json</a>
+  </nav>
+
+
+  <h2>Demo clip</h2>
+  <figure id="demo">
+    <div class="video-frame">
+      <a href="demo.mp4" aria-label="Open the 5.9 second sample-data interaction clip">
+        <img src="demo-poster.png" alt="Provider Usage popover in the component harness, sample data" width="1280" height="720" loading="eager" />
+        <span class="play" aria-hidden="true">▶</span>
+      </a>
+    </div>
+    <div class="video-meta"><a href="demo.mp4">Open demo.mp4</a> · 5.9 s · 1280×720 · silent</div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">▶</span><strong>Real chip click, popover open</strong></div>
+      <p>A short screen recording of the component harness: the pointer moves to the chip, clicks, and the popover opens. Every value is sample data; the on-screen label says so. No live account or packaged desktop is shown.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1280×720</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+
+  <h2>The three surfaces</h2>
+
+  <figure id="01-status-chip">
+    <div class="frame frame-small">
+      <img src="screenshots/01-status-chip.png" alt="Provider Usage — status-bar chip (sample data)" width="274" height="104" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">01</span><strong>status-bar chip</strong></div>
+      <p>The status-bar chip is the always-on entry point. It shows the active provider and the governing subscription windows, not a private chat quota.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>274×104</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="02-popover-current">
+    <div class="frame">
+      <img src="screenshots/02-popover-current.png" alt="Provider Usage — current provider popover (sample data)" width="808" height="813" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">02</span><strong>current provider popover</strong></div>
+      <p>Clicking the chip opens the current provider’s detail popover: every governing window, reset time, and any paid fallback balance.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>808×813</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="03-popover-running-agents">
+    <div class="frame">
+      <img src="screenshots/03-popover-running-agents.png" alt="Provider Usage — running agents footer (sample data)" width="808" height="720" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">03</span><strong>running agents footer</strong></div>
+      <p>The footer attributes only what the gateway can prove. A child with a matching account shows the shared pool (5h 62%); a mismatched or missing account shows an em dash instead of borrowing another account’s balance.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>808×720</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+  <h2>The provider page</h2>
+
+  <figure id="04-overview-multi-provider">
+    <div class="frame">
+      <img src="screenshots/04-overview-multi-provider.png" alt="Provider Usage — full page, multiple providers (sample data)" width="1520" height="2053" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">04</span><strong>full page, multiple providers</strong></div>
+      <p>The full page keeps subscription windows and credit balances together: the active Codex allowance, DeepSeek API credit, OpenCode Go, Ollama Cloud, and an xAI sample row. On stock 0.23.1 the xAI row shows an official account link instead of credits.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×2053</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="05-overview-expanded-metrics">
+    <div class="frame">
+      <img src="screenshots/05-overview-expanded-metrics.png" alt="Provider Usage — expanded active-provider metrics (sample data)" width="1520" height="2272" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">05</span><strong>expanded active-provider metrics</strong></div>
+      <p>When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, published token rates, and the shared-pool breakdown. Not every provider returns every field.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×2272</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+  <h2>Banked reset credits</h2>
+
+  <figure id="11-reset-summary">
+    <div class="frame">
+      <img src="screenshots/11-reset-summary.png" alt="Provider Usage — banked reset summary (sample data)" width="1520" height="2492" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">11</span><strong>banked reset summary</strong></div>
+      <p>The stock-native reset panel reads the active Codex account only. This is a fixture summary: 2 banked resets, 1 usable now, with provider-reported inventory. No reset was redeemed.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×2492</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="12-reset-confirm">
+    <div class="frame">
+      <img src="screenshots/12-reset-confirm.png" alt="Provider Usage — reset confirmation preview (sample data)" width="1520" height="2630" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">12</span><strong>reset confirmation preview</strong></div>
+      <p>Preview/confirm is separately gated. This fixture stops at the confirmation preview; the confirm button is visible but was never clicked, and no reset was redeemed.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×2630</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+  <h2>Popular provider cards</h2>
+
+  <figure id="06-popular-connections">
+    <div class="frame">
+      <img src="screenshots/06-popular-connections.png" alt="Provider Usage — popular provider connection cards (sample data)" width="1520" height="3119" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">06</span><strong>popular provider connection cards</strong></div>
+      <p>Three always-listed connection cards separate subscription quota from API billing. They report credential presence and supported read paths only; an unconnected card says so instead of showing an invented zero.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×3119</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+  <h2>Definitions and trust states</h2>
+
+  <figure id="07-catalog-available">
+    <div class="frame">
+      <img src="screenshots/07-catalog-available.png" alt="Provider Usage — available to connect cards (sample data)" width="1520" height="825" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">07</span><strong>available to connect cards</strong></div>
+      <p>Read-only JSON definitions that ship in the catalog appear as Available to connect and name the exact missing environment variable. A card is setup guidance, not a live account test.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×825</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="08-catalog-trust">
+    <div class="frame">
+      <img src="screenshots/08-catalog-trust.png" alt="Provider Usage — approval, blocked, unknown states (sample data)" width="1520" height="2211" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">08</span><strong>approval, blocked, unknown states</strong></div>
+      <p>Profile-local definitions stay untrusted until a human approves that exact content. Editing the file, a mismatched approval record, or an unrecognized backend state is shown explicitly; nothing is fetched or invented.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1520×2211</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+  <figure id="09-catalog-invalid">
+    <div class="frame">
+      <img src="screenshots/09-catalog-invalid.png" alt="Provider Usage — invalid definition errors (sample data)" width="1472" height="362" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">09</span><strong>invalid definition errors</strong></div>
+      <p>An invalid profile definition keeps its exact schema errors visible, so the fix is actionable instead of a silent empty card.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>1472×362</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+  <h2>Responsive layout</h2>
+
+  <figure id="10-narrow-420">
+    <div class="frame">
+      <img src="screenshots/10-narrow-420.png" alt="Provider Usage — narrow responsive pane (sample data)" width="840" height="2266" loading="eager" />
+    </div>
+    <figcaption>
+      <div class="cap-head"><span class="cap-num">10</span><strong>narrow responsive pane</strong></div>
+      <p>At a 420px pane width the plugin’s own layout stacks meters and provider cards without changing the data or hiding a reset.</p>
+      <div class="cap-meta"><span>SAMPLE DATA</span><span>840×2266</span><span>component harness</span></div>
+    </figcaption>
+  </figure>
+
+
+  <div class="notes">
+    <h3>What this package establishes — and what it does not</h3>
+    <ul>
+      <li>The real <code>desktop/plugin.js</code> components render with the real SDK Button, Badge, Popover, StatusDot and theme tokens.</li>
+      <li>The chip is wired as the popover trigger; the open state, meters, provider rows, catalog cards, and running-agent footer are asserted by the capture script.</li>
+      <li>It does <strong>not</strong> establish the packaged Electron shell, a real gateway socket, or live provider responses. It uses synthetic sample data; final release captures wait on the frozen stock build.</li>
+      <li>The definition trust states and provider-card copy are fixture-tested. No real account was read for these images.</li>
+    </ul>
+  </div>
+  <footer>Generated by <code>harness/hackathon-capture.mjs</code> + <code>harness/hackathon-render.mjs</code> + <code>harness/hackathon-video-playwright.mjs</code>. Screenshot crops are 2× CSS pixels; image metadata stripped. Video re-muxed with metadata cleared. See <a href="manifest.json" style="color:var(--muted)">manifest.json</a> for hashes and exact dimensions.</footer>
+</main>
+</body>
+</html>

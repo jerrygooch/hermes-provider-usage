@@ -1,17 +1,22 @@
 # Reset capabilities: read-only inventory, expiry, and settings links
 
-Status: research and design, updated 2026-11-11 for the preview/confirm
-service. This document, `dashboard/reset_service.py`, and the reset/stock test
-modules are the reset work added by this task. No credential, account, provider
-setting, or purchase flow was touched. No reset was redeemed and no reset or
-credit was bought.
+Status: **historical design and audit record**, updated for the implementation at
+`fd895ea`. The current behavior is the preview → confirm service described in
+`dashboard/reset_service.py`: it exposes read-only summary, preview, confirm, and
+readback routes; the server selects the credit; no credit selector, force flag, caller
+URL, or purchase flag is accepted; success requires an independent same-identity
+readback with a lower count; and a missing or mismatched readback is `uncertain`, never
+retried. The active account is a point-in-time re-check, not an atomic binding, because
+core redemption remains account-implicit. The sections below preserve the research and
+the rejected alternatives; "proposed" and "in-flight" notes describe the state when they
+were written, not a release TODO. No credential, account, provider setting, or purchase
+flow was touched. No reset was redeemed and no reset or credit was bought.
 
-Environment note: this audit ran against the stock checkout
-`C:/Users/jerry/projects/provider-usage-stock-host` at
-`92790b119b` with the `xai-plugin-provider-requests` test venv. A bare default
-interpreter can import an older installed core whose `AccountUsageSnapshot`
-lacks `identity_id`; set `PYTHONPATH` to the stock checkout before running the
-compatibility suites. That is an environment mismatch, not a reset regression.
+Environment note: the audit ran against a stock Hermes 0.23.1 checkout at
+`/path/to/hermes-0.23.1` with its test venv. A bare default interpreter can import an
+older installed core whose `AccountUsageSnapshot` lacks `identity_id`; set `PYTHONPATH`
+to the stock checkout before running the compatibility suites. That is an environment
+mismatch, not a reset regression.
 
 Deadline context: the safe ship is a preview -> confirm action bound to the
 active account, never a one-click button or an automatic retry.
@@ -428,7 +433,7 @@ Read-only display and redemption selection are different problems.
 
 Do this only after the active provider-card worker releases
 `dashboard/plugin_api.py` and `desktop/plugin.js`. The core seam is a separate
-worktree (`C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`).
+worktree (`/path/to/optional-hermes-checkout`).
 
 ### Phase 0 — core read-only detail fetch
 

@@ -1,9 +1,9 @@
 # Stock Hermes compatibility
 
-Provider Usage 0.10 runs on the **stock** Hermes 0.23.1 tree pinned at
-`C:/Users/jerry/projects/provider-usage-stock-host` (`92790b119b`) with no core
+Provider Usage 0.10 runs on the **stock** Hermes 0.23.1 tree with no core
 patch, no private worktree and no required core commit. The manifest floor is
-`requires_hermes: ">=0.23.1"`.
+`requires_hermes: ">=0.23.1"`. The route matrix below is the current release
+behavior; the optional enhanced path is not an install dependency.
 
 ## Route matrix on stock 0.23.1
 
@@ -60,20 +60,20 @@ Stock-only limitations, stated exactly:
 ## Verification
 
 ```bash
-cd C:/Users/jerry/projects/hermes-provider-usage-ext
+cd /path/to/hermes-provider-usage-ext
 
-# stock 0.23.1
-PYTHONPATH=C:/Users/jerry/projects/provider-usage-stock-host \
+# stock 0.23.1 checkout
+PYTHONPATH=/path/to/hermes-0.23.1 \
   python -m unittest discover -s tests -p "test_stock_compatibility.py" -q
 
 # whole plugin suite on stock
-PYTHONPATH=C:/Users/jerry/projects/provider-usage-stock-host npm run check
+PYTHONPATH=/path/to/hermes-0.23.1 npm run check
 
-# enhanced seam worktree (optional helpers present)
-PYTHONPATH=C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams \
+# optional enhanced checkout (identity/summary/broker helpers present)
+PYTHONPATH=/path/to/optional-hermes-checkout \
   npm run check
 HERMES_PU_ACCEPT_MIGRATION=1 \
-PYTHONPATH=C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams \
+PYTHONPATH=/path/to/optional-hermes-checkout \
   python -m unittest discover -s tests -p "test_credential_migration_parity.py" -q
 ```
 
@@ -81,3 +81,5 @@ The stock acceptance test executes the real stock `fetch_account_usage` for
 Codex, Anthropic, OpenRouter and the Go provider hook; only HTTP transport and
 auth resolution are fixtures. It also checks the direct env fallbacks, the Nous
 builder, the official-link xAI row, and that no account identity is invented.
+These are automated compatibility tests, not live-account tests; no private
+provider account was called.

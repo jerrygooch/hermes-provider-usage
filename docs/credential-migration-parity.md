@@ -1,16 +1,23 @@
-# Credential migration parity contract — completed
+# Credential migration parity contract — historical migration record
+
+Status: **historical migration record**. The route table below describes the optional
+enhanced-core target used to prove field parity; it is **not** a stock route claim. On
+stock Hermes 0.23.1 the live routes are: read-only snapshots for Codex, Anthropic,
+OpenRouter and the OpenCode Go provider hook; profile-scoped `get_secret` to fixed
+official endpoints for DeepSeek, Ollama Cloud and OpenCode Zen; the core
+`build_nous_credits_snapshot` builder for Nous; and an official-link, unavailable row for
+xAI because stock has no broker. See [stock-support.md](stock-support.md) for the
+current matrix. The parity work here is still the reason the plugin never reads a
+runtime key, credential pool, or auth store.
 
 Whole-plugin migration of the built-in Provider Usage adapters onto the public
 Hermes credential routes, with the Desktop pane's field parity preserved.
 
-- Candidate: `C:/Users/jerry/projects/hermes-provider-usage-ext` (branch
-  `provider-extensibility`, dirty working tree preserved).
-- Completed against the isolated core checkout
-  `C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`
-  at `a4c484eb5d` (contains `622eb3219f` provider fetchers/identities and the
-  cherry-picked `13152f4603` delegation metadata).
-- No release contained those commits when the migration was written; stock
-  `0.23.1` exposes the required read-only snapshot route, so `plugin.yaml`
+- Candidate: this repository checkout (branch `provider-extensibility` in the original
+  development tree).
+- Completed against an optional isolated core checkout at
+  `/path/to/optional-hermes-checkout` (`a4c484eb5d`).
+- Stock `0.23.1` exposes the required read-only snapshot route, so `plugin.yaml`
   floors at `>=0.23.1`. Enhanced identity/summary/broker helpers remain optional,
   degrade one row, and are covered by `docs/stock-support.md`.
 - Nothing was installed into the daily Hermes home, published, or restarted.
@@ -22,12 +29,12 @@ Hermes credential routes, with the Desktop pane's field parity preserved.
 | P1 | `openai-codex` | `fetch_account_usage("openai-codex", read_only=True)` + `snapshot.raw` | plan names, default/Spark/code-review groups, extra-usage balance, `credit_status`, banked resets, `model_access`, `spend_control`, reached-type detail |
 | P2 | `anthropic` | `fetch_account_usage("anthropic", read_only=True)` | four windows incl. model-scoped Opus/Sonnet weeks (`scope` preserved), `extra_usage` detail, honest API-key-account reason |
 | P3 | `openrouter` | `fetch_account_usage("openrouter", read_only=True)` + raw `{credits,key}` | remaining credits with `total`/`used`, API-key quota + reset detail, free-model daily quota, `key_usage` total/daily/weekly/monthly/BYOK |
-| P4 | `deepseek` | `fetch_account_usage("deepseek", read_only=True)` + raw `{balance}` | every `balance_infos` row, `granted_balance`/`topped_up_balance`, provider currency verbatim, unavailable reason |
-| P5 | `xai-oauth` | `credentialed_provider_request("xai-oauth", …)` for both Grok origins | plan, weekly/monthly percent + reset, reconciled product split + note, prepaid balance, saved-payment/unified-pool details, gRPC fallback cap/used |
+| P4 | `deepseek` | Stock: `get_secret("DEEPSEEK_API_KEY")` at `https://api.deepseek.com/user/balance`; enhanced core may return raw `{balance}` | every `balance_infos` row, `granted_balance`/`topped_up_balance`, provider currency verbatim, unavailable reason |
+| P5 | `xai-oauth` | `credentialed_provider_request("xai-oauth", …)` for both Grok origins when the host brokers it; **stock has no broker** | plan, weekly/monthly percent + reset, reconciled product split + note, prepaid balance, saved-payment/unified-pool details, gRPC fallback cap/used; stock shows the official link only |
 | P6 | `opencode-go` | `fetch_account_usage("opencode-go", read_only=True)` (profile hook, core fallback + whole raw `{usage}`) | rolling→5-hour/weekly/monthly, `allowed/limit_reached`, Go product + allowance note, Zen product marked unavailable, detail lines |
-| P7 | `opencode-zen` | `fetch_account_usage("opencode-zen", read_only=True)` + raw `{models}` | authenticated-access detail, Zen product row, no invented wallet |
-| P8 | `ollama-cloud` | `fetch_account_usage("ollama-cloud", read_only=True)` + raw `{usage,balance}` | session/weekly/monthly percent, per-model counts, spend-in-period, `activity` totals/buckets/hit rate, monthly included allowance, purchased credits |
-| P9 | `nous` | `fetch_account_usage("nous", read_only=True)` | gauge percent, subscription/top-up/total-usable/rollover details, renewal, plan, top-up link, depleted line; no `hermes_cli.nous_account` import |
+| P7 | `opencode-zen` | Stock: `get_secret("OPENCODE_ZEN_API_KEY")` at the fixed `/zen/v1/models` access check; enhanced core may normalize the snapshot | authenticated-access detail, Zen product row, no invented wallet |
+| P8 | `ollama-cloud` | Stock: `get_secret("OLLAMA_API_KEY")` at fixed `/api/usage` + `/api/balance`; enhanced core may return raw `{usage,balance}` | session/weekly/monthly percent, per-model counts, spend-in-period, `activity` totals/buckets/hit rate, monthly included allowance, purchased credits |
+| P9 | `nous` | Stock: core `build_nous_credits_snapshot`; enhanced core may expose `fetch_account_usage("nous")` | gauge percent, subscription/top-up/total-usable/rollover details, renewal, plan, top-up link, depleted line; no private Nous account module import |
 | P10 | unsupported/custom names | inventory only | row presence, label, `capability: "unsupported"`, alias canonicalisation |
 | P11 | declarative definitions | `agent.secret_scope.get_secret` (unchanged) | mapped windows/balances/details, trust gate, setup metadata |
 
@@ -118,8 +125,8 @@ Rules enforced by tests and code:
 ## How to run
 
 ```bash
-cd C:/Users/jerry/projects/hermes-provider-usage-ext
-export PYTHONPATH=C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams
+cd /path/to/hermes-provider-usage-ext
+export PYTHONPATH=/path/to/optional-hermes-checkout
 
 # Parity baseline (normal suite; gated classes stay skipped)
 python -m unittest discover -s tests -p "test_*.py" -q
