@@ -1,0 +1,56 @@
+{
+  "schema": "hermes.provider-usage.definition/1",
+  "id": "github-rate-limit",
+  "name": "GitHub API rate limit",
+  "description": "Rolling REST API request windows that GitHub reports for the current IP or token. Public data needs no credential; a token raises the account limits.",
+  "version": 1,
+  "docs_url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+  "scope_note": "GitHub REST API request windows for this machine's IP or the configured token. Not an inference allowance.",
+  "stability": "stable",
+  "request": {
+    "url": "https://api.github.com/rate_limit",
+    "method": "GET",
+    "hosts": ["api.github.com"],
+    "headers": []
+  },
+  "cache_ttl_seconds": 60,
+  "mapping": {
+    "title": "GitHub REST API",
+    "plan": {"value": "Rate limit"},
+    "windows": [
+      {
+        "label": "Core",
+        "kind": "rolling",
+        "rolling": true,
+        "unit": "requests",
+        "limit": {"path": "resources.core.limit"},
+        "used": {"path": "resources.core.used"},
+        "remaining": {"path": "resources.core.remaining"},
+        "reset_at": {"path": "resources.core.reset", "format": "unix"}
+      },
+      {
+        "label": "Search",
+        "kind": "rolling",
+        "rolling": true,
+        "unit": "requests",
+        "limit": {"path": "resources.search.limit"},
+        "used": {"path": "resources.search.used"},
+        "remaining": {"path": "resources.search.remaining"},
+        "reset_at": {"path": "resources.search.reset", "format": "unix"}
+      },
+      {
+        "label": "GraphQL",
+        "kind": "rolling",
+        "rolling": true,
+        "unit": "requests",
+        "limit": {"path": "resources.graphql.limit"},
+        "used": {"path": "resources.graphql.used"},
+        "remaining": {"path": "resources.graphql.remaining"},
+        "reset_at": {"path": "resources.graphql.reset", "format": "unix"}
+      }
+    ],
+    "details": [
+      {"path": "rate.rate", "prefix": "Rate-limit plan: "}
+    ]
+  }
+}

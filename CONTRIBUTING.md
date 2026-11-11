@@ -30,6 +30,18 @@ A provider adapter must keep authentication in the Python backend and return onl
 
 Add fixture coverage for the funding behavior you introduce. Subscription allowances take priority; API or extra-usage balances are fallback unless the product is credit-only.
 
+## Declarative provider contributions
+
+A fixed read-only HTTPS endpoint with a JSON response may be contributed as a definition instead of a Python adapter. Definitions are data only: no scripts, `eval`, literal credentials, arbitrary headers, private-network URLs, redirects, or non-GET methods.
+
+- Put bundled definitions in `dashboard/definitions/catalog/` and validate with `python scripts/validate_definition.py dashboard/definitions/catalog`.
+- Use `dashboard/definitions/TEMPLATE.json` and the schema reference in `dashboard/definitions/README.md`.
+- Reference credentials with `{"source":"env","name":"..."}` or a Hermes provider field; never include the value.
+- Exercise the page states: connected, available (missing credential), invalid, needs permission, unverified mapping, and stale. Missing paths must not render as zero.
+- Package a contribution locally with `python scripts/package-definition.py <file>`. The script performs no network call and does not publish; open a PR manually after review.
+
+OAuth refresh, multi-step flows, writes, gRPC, and HTML scraping still require a Python adapter.
+
 ## Before opening a pull request
 
 Run:

@@ -389,9 +389,17 @@ function mergeOpenCodeRows(rows, activeProvider = '') {
   return withoutProducts
 }
 
-function round(value) {
+// Null and '' mean "not reported", never zero. Number(null) === 0 is the
+// classic way an unknown allowance turns into a fabricated exhausted meter.
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null
   const number = Number(value)
-  return Number.isFinite(number) ? Math.round(number) : null
+  return Number.isFinite(number) ? number : null
+}
+
+function round(value) {
+  const number = finiteNumber(value)
+  return number == null ? null : Math.round(number)
 }
 
 // "in 3h 12m" — the glanceable form of a reset time (absolute shown beside it).
@@ -433,6 +441,14 @@ function rateAmount(value) {
 function money(balance) {
   const amount = Number(balance?.amount)
   if (!Number.isFinite(amount)) return '—'
+  const unit = String(balance?.unit || 'currency').toLowerCase()
+  if (unit !== 'currency') {
+    const label = balance?.unitLabel || (unit === 'custom' ? 'units' : unit)
+    const value = Math.abs(amount - Math.round(amount)) < 1e-9
+      ? Math.round(amount).toLocaleString()
+      : amount.toFixed(2)
+    return `${value} ${label}`
+  }
   const currency = String(balance?.currency || 'USD').toUpperCase()
   return currency === 'USD' ? `$${amount.toFixed(2)}` : `${currency} ${amount.toFixed(2)}`
 }
@@ -457,6 +473,9 @@ function isSparkModel(model) {
 }
 
 function windowKind(window) {
+  const explicit = String(window?.kind || '').toLowerCase()
+  if (explicit === 'five_hour' || explicit === 'five-hour') return '5-hour'
+  if (explicit === 'daily' || explicit === 'weekly' || explicit === 'monthly' || explicit === 'rolling' || explicit === 'custom') return explicit
   const label = String(window?.label || '').toLowerCase()
   if (label.includes('week') || label.includes('7-day')) return 'weekly'
   if (label.includes('5-hour') || label.includes('session')) return '5-hour'
@@ -525,7 +544,10 @@ function fundingState(row, model) {
   if (!row) return { kind: 'unknown', windows: [], balance: null, exhausted: false, fallback: false }
   const { limit, windows } = governingWindows(row, model)
   const balance = preferredBalance(row)
-  const exhausted = windows.length > 0 && windows.some(window => Number(window?.remaining_percent) <= 0)
+  const exhausted = windows.length > 0 && windows.some(window => {
+    const remaining = finiteNumber(window?.remaining_percent)
+    return remaining != null && remaining <= 0
+  })
 
   if (windows.length > 0 && !exhausted) {
     return { kind: 'subscription', limit, windows, balance, exhausted: false, fallback: false }
@@ -543,7 +565,7 @@ function dollarWindow(row) {
   const limits = Array.isArray(row?.limits) ? row.limits : []
   for (const limit of limits) {
     const windows = Array.isArray(limit?.windows) ? limit.windows : []
-    const found = windows.find(window => Number.isFinite(Number(window?.spent_usd)) && Number.isFinite(Number(window?.remaining_usd)))
+    const found = windows.find(window => finiteNumber(window?.spent_usd) != null && finiteNumber(window?.remaining_usd) != null)
     if (found) return found
   }
   return null
@@ -551,11 +573,11 @@ function dollarWindow(row) {
 
 function dollarWindowSummary(window) {
   if (!window) return null
-  const spent = Number(window.spent_usd)
-  const left = Number(window.remaining_usd)
-  if (!Number.isFinite(spent) || !Number.isFinite(left)) return null
-  const allowance = Number(window.allowance_usd)
-  const cap = Number.isFinite(allowance) ? ` of $${allowance.toFixed(allowance === Math.round(allowance) ? 0 : 2)}` : ''
+  const spent = finiteNumber(window.spent_usd)
+  const left = finiteNumber(window.remaining_usd)
+  if (spent == null || left == null) return null
+  const allowance = finiteNumber(window.allowance_usd)
+  const cap = allowance == null ? '' : ` of $${allowance.toFixed(allowance === Math.round(allowance) ? 0 : 2)}`
   return `$${spent.toFixed(2)} spent · $${left.toFixed(2)}${cap} left`
 }
 
@@ -582,10 +604,14 @@ function compactFundingSummary(row, model) {
       const window = state.windows[0]
       const label = shortWindowLabel(window)
       const remaining = round(window.remaining_percent)
+      if (remaining == null) return `${label} unavailable`
       return /^(subscription|allowance|limit)$/i.test(label) ? `${remaining}% left` : `${label} ${remaining}%`
     }
     return state.windows
-      .map(window => `${shortWindowLabel(window)} ${round(window.remaining_percent)}%`)
+      .map(window => {
+        const remaining = round(window.remaining_percent)
+        return remaining == null ? `${shortWindowLabel(window)} unavailable` : `${shortWindowLabel(window)} ${remaining}%`
+      })
       .join(' · ')
   }
   if (row?.id === 'opencode-zen') return 'Zen balance unavailable'
@@ -674,7 +700,9 @@ function windowMeta(window) {
     ? countdown
       ? `Resets in ${countdown} · ${when}`
       : `Resets ${when}`
-    : 'Reset time unavailable'
+    : window?.rolling
+      ? 'Rolling window'
+      : 'Reset time not reported'
   const parts = [resetPart, detail].filter(Boolean)
   return parts.join(' • ')
 }
@@ -683,6 +711,40 @@ function progressWidth(window) {
   const remaining = Number(window?.remaining_percent)
   if (!Number.isFinite(remaining)) return '0%'
   return `${Math.max(0, Math.min(100, remaining))}%`
+}
+
+function windowUnitLabel(window) {
+  const unit = String(window?.unit || '').toLowerCase()
+  if (!unit || unit === 'percent') return '%'
+  if (unit === 'custom') return 'units'
+  return window?.unitLabel || unit
+}
+
+function formatWindowQuantity(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return null
+  if (Math.abs(number - Math.round(number)) < 1e-9) return Math.round(number).toLocaleString()
+  if (Math.abs(number) >= 100) return number.toLocaleString(undefined, { maximumFractionDigits: 0 })
+  return number.toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
+// Percent is the primary reading. When a definition only supplies absolute
+// values (used/limit or remaining), show those rather than a fabricated 0%.
+function windowValueSummary(window) {
+  const dollars = dollarWindowSummary(window)
+  if (dollars) return dollars
+  const remaining = round(window?.remaining_percent)
+  if (remaining != null) return `${remaining}% left`
+  const used = finiteNumber(window?.used)
+  const limit = finiteNumber(window?.limit)
+  const left = finiteNumber(window?.remaining)
+  if (limit != null && limit === 0) return 'No allowance'
+  if (used != null && limit != null && limit > 0) {
+    return `${formatWindowQuantity(used)} / ${formatWindowQuantity(limit)} ${windowUnitLabel(window)}`
+  }
+  if (used != null) return `${formatWindowQuantity(used)} ${windowUnitLabel(window)} used`
+  if (left != null) return `${formatWindowQuantity(left)} ${windowUnitLabel(window)} left`
+  return 'Unavailable'
 }
 
 function UsageMeter({ window, compact = false }) {
@@ -703,7 +765,7 @@ function UsageMeter({ window, compact = false }) {
           jsx('span', { style: { ...textSecondary, fontSize: compact ? 11 : 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: cleanWindowLabel(window) }),
           jsx('strong', {
             style: { ...textPrimary, color: exhausted || low ? meterTone : textPrimary.color, fontSize: compact ? 11.5 : 12.5, fontWeight: 650, fontVariantNumeric: 'tabular-nums' },
-            children: dollarWindowSummary(window) || (remaining == null ? 'Unavailable' : `${remaining}% left`)
+            children: windowValueSummary(window)
           })
         ]
       }),
@@ -838,7 +900,7 @@ function LimitGroup({ rowId, limit, grouped = false }) {
         ]
       }),
       jsx('div', {
-        style: { display: 'grid', gridTemplateColumns: windows.length > 1 ? 'repeat(auto-fit, minmax(145px, 1fr))' : '1fr', columnGap: 18, rowGap: 1 },
+        style: { display: 'grid', gridTemplateColumns: windows.length > 1 ? 'repeat(auto-fit, minmax(200px, 1fr))' : '1fr', columnGap: 18, rowGap: 1 },
         children: windows.map(window => jsx(UsageMeter, { window, compact: true }, `${rowId}-${limit?.id}-${window?.label}`))
       })
     ]
@@ -1231,6 +1293,81 @@ function ProviderNotes({ row, complete = false }) {
   })
 }
 
+function definitionStateMeta(row) {
+  if (!row?.definition) return null
+  const state = String(row?.state || '')
+  if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn', tone: 'warn' }
+  if (state === 'not_connected') return { label: 'Not connected', variant: 'muted' }
+  if (state === 'unavailable') return { label: 'Unavailable', variant: 'muted' }
+  if (state === 'unverified') return { label: 'Unverified mapping', variant: 'warn' }
+  if (state === 'stale') return { label: 'Stale data', variant: 'warn' }
+  if (state === 'invalid_definition') return { label: 'Invalid definition', variant: 'destructive' }
+  return null
+}
+
+function DefinitionBadge({ row }) {
+  if (!row?.definition) return null
+  const meta = definitionStateMeta(row)
+  return jsx(Badge, {
+    variant: meta?.variant || 'outline',
+    size: 'xs',
+    children: meta?.label || 'Definition'
+  })
+}
+
+function DefinitionPanel({ row }) {
+  if (!row?.definition || !row?.provenance) return null
+  const prov = row.provenance
+  const freshness = row?.freshness || {}
+  const age = finiteNumber(freshness.age_seconds)
+  const ageText = age == null
+    ? null
+    : age < 90
+      ? `checked ${age}s ago`
+      : age < 7200
+        ? `checked ${Math.round(age / 60)}m ago`
+        : `checked ${Math.round(age / 3600)}h ago`
+  const cache = prov.cache === 'hit'
+    ? 'cached response'
+    : prov.cache === 'stale'
+      ? 'stale cached response'
+      : prov.cache === 'none'
+        ? 'not fetched'
+        : 'fresh fetch'
+  const source = prov.definition_source === 'profile' ? 'Profile definition' : 'Bundled definition'
+  const override = prov.overrides ? ' · overrides bundled copy' : ''
+  const error = prov.error || (row.state && row.state !== 'ok' ? row.unavailable_reason : null)
+  return jsxs('section', {
+    style: { display: 'grid', gap: 3, paddingTop: 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionLabel, { aside: `${prov.endpoint_host || ''}`, children: 'Data source' }, 'label'),
+      jsx('span', {
+        style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' },
+        children: `${source} ${prov.definition_id} v${prov.definition_version}${override}`
+      }, 'definition'),
+      jsx('span', {
+        style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' },
+        children: [
+          cache,
+          ageText,
+          `TTL ${prov.ttl_seconds || 0}s`,
+          `scope ${prov.scope || 'active'}`,
+          prov.definition_file ? prov.definition_file : null
+        ].filter(Boolean).join(' · ')
+      }, 'freshness'),
+      prov.docs_url
+        ? jsx('span', {
+            style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' },
+            children: prov.docs_url
+          }, 'docs')
+        : null,
+      error
+        ? jsx('span', { style: { ...textTertiary, fontSize: 10, lineHeight: 1.45, color: 'var(--ui-orange)' }, children: error }, 'error')
+        : null
+    ]
+  })
+}
+
 function AllProviderMetrics({ row, complete = false }) {
   const limits = Array.isArray(row?.limits) ? row.limits : []
   const balances = Array.isArray(row?.balances) ? row.balances : []
@@ -1255,7 +1392,8 @@ function AllProviderMetrics({ row, complete = false }) {
         jsx(KeyUsagePanel, { keyUsage: row?.key_usage }),
         jsx(ActivityPanel, { activity: row?.activity }),
         jsx(CachePanel, { cache: row?.cache }),
-        jsx(RatesPanel, { row })
+        jsx(RatesPanel, { row }),
+        jsx(DefinitionPanel, { row })
       ]
     })
   }
@@ -1288,7 +1426,8 @@ function AllProviderMetrics({ row, complete = false }) {
       jsx(KeyUsagePanel, { keyUsage: row?.key_usage }),
       jsx(ActivityPanel, { activity: row?.activity }),
       jsx(CachePanel, { cache: row?.cache }),
-      jsx(RatesPanel, { row })
+      jsx(RatesPanel, { row }),
+      jsx(DefinitionPanel, { row })
     ]
   })
 }
@@ -1330,7 +1469,8 @@ function ActiveProvider({ row, model }) {
                     id: 'provider-usage-active-heading',
                     style: { ...textPrimary, margin: 0, fontSize: 15, lineHeight: 1.3, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
                     children: row?.label || 'Active provider'
-                  })
+                  }),
+                  jsx(DefinitionBadge, { row }, 'definition-state')
                 ]
               }),
               jsx('div', {
@@ -1400,7 +1540,8 @@ function ProviderDisclosure({ row }) {
                   style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 },
                   children: [
                     jsx(StatusDot, { tone: row.available ? 'good' : 'muted' }),
-                    jsx('span', { style: { ...textPrimary, fontSize: 12, fontWeight: 550, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label })
+                    jsx('span', { style: { ...textPrimary, fontSize: 12, fontWeight: 550, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label }),
+                    jsx(DefinitionBadge, { row }, 'definition-state')
                   ]
                 }),
                 jsx('span', { style: { ...textQuaternary, paddingLeft: 13, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.plan || (row.capability === 'balance' ? 'API credits' : 'Account usage') })
@@ -1540,7 +1681,7 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
 
   let summary = 'unavailable'
   if (switching) summary = 'switching'
-  else if (backendGone) summary = 'plugin off'
+  else if (backendGone) summary = 'plugin not enabled'
   else if (!provider && sessionId) summary = 'checking'
   else if (row) summary = statusFundingSummary(row, model)
   else if (ready && (query.isLoading || !matched)) summary = 'checking'
@@ -1756,6 +1897,157 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
   })
 }
 
+function catalogStateMeta(entry) {
+  const state = String(entry?.state || '')
+  if (state === 'available') return { label: 'Available to connect', variant: 'outline' }
+  if (state === 'ready') return { label: 'Ready to read', variant: 'success' }
+  if (state === 'invalid') return { label: 'Invalid definition', variant: 'destructive' }
+  if (state === 'unverified') return { label: 'Unverified mapping', variant: 'warn' }
+  if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn' }
+  if (state === 'unavailable') return { label: 'Unavailable', variant: 'muted' }
+  if (state === 'stale') return { label: 'Stale data', variant: 'warn' }
+  return { label: 'Connected', variant: 'success' }
+}
+
+function catalogSetupText(entry) {
+  const setup = entry?.setup || {}
+  const missing = Array.isArray(entry?.missing_credentials) ? entry.missing_credentials : []
+  const file = setup.file || `${entry?.id || 'definition'}.json`
+  const directory = setup.directory || '$HERMES_HOME/provider-usage/providers'
+  return [
+    `Provider Usage definition: ${entry?.name || entry?.id || 'definition'} (${entry?.id || 'unknown'} v${entry?.version || 1})`,
+    `Save as: ${directory}/${file}`,
+    missing.length ? `Credentials (environment): ${missing.join(', ')}` : 'No credential required.',
+    Array.isArray(entry?.errors) && entry.errors.length ? `Fix: ${entry.errors.slice(0, 2).join(' | ')}` : 'Validate: python scripts/validate_definition.py <file>',
+    entry?.docs_url ? `Docs: ${entry.docs_url}` : null
+  ].filter(Boolean).join('\n')
+}
+
+function CatalogCard({ entry }) {
+  const state = catalogStateMeta(entry)
+  const missing = Array.isArray(entry?.missing_credentials) ? entry.missing_credentials : []
+  const errors = Array.isArray(entry?.errors) ? entry.errors : []
+  const setup = entry?.setup || {}
+  const docs = entry?.docs_url
+  const copy = () => {
+    haptic('tap')
+    const text = catalogSetupText(entry)
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text)
+        host.notify({ kind: 'info', message: 'Setup copied. Keep credentials in the environment, never in the JSON.' })
+        return
+      }
+    } catch {
+      // Fall through to a plain notice when the clipboard is unavailable.
+    }
+    host.notify({ kind: 'info', message: 'Copy the setup from the definition docs; credentials stay in the environment.' })
+  }
+  return jsxs('div', {
+    style: { border: '1px solid var(--ui-stroke-tertiary)', borderRadius: 8, background: 'var(--ui-bg-card)', padding: '11px 13px', display: 'grid', gap: 5 },
+    children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', minWidth: 0 },
+        children: [
+          jsx('span', { style: { ...textPrimary, fontSize: 12, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry?.name || entry?.id || 'Definition' }, 'name'),
+          jsx(Badge, { variant: state.variant, size: 'xs', children: state.label }, 'state'),
+          jsx(Badge, { variant: entry?.source === 'profile' ? 'outline' : 'muted', size: 'xs', children: entry?.source === 'profile' ? 'Profile' : 'Bundled' }, 'source'),
+          entry?.stability === 'experimental' ? jsx(Badge, { variant: 'warn', size: 'xs', children: 'Experimental' }, 'stability') : null
+        ]
+      }),
+      entry?.description
+        ? jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: entry.description }, 'description')
+        : null,
+      jsxs('span', {
+        style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' },
+        children: [
+          entry?.host || null,
+          entry?.version ? `v${entry.version}` : null,
+          setup.file || null,
+          entry?.last_error || null
+        ].filter(Boolean).join(' · ')
+      }, 'meta'),
+      missing.length
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45 }, children: `Needs ${missing.join(', ')} in the environment (never in the JSON).` }, 'missing')
+        : entry?.state === 'invalid'
+          ? jsx('span', { style: { ...textQuaternary, fontSize: 10.5, lineHeight: 1.45 }, children: 'Fix the validation errors below, then refresh.' }, 'invalid-help')
+          : jsx('span', { style: { ...textQuaternary, fontSize: 10.5, lineHeight: 1.45 }, children: 'No credential required for this definition.' }, 'no-credential'),
+      errors.length > 0
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 2, paddingTop: 2 },
+            children: errors.slice(0, 3).map((error, index) =>
+              jsx('span', { style: { ...textTertiary, fontSize: 10, lineHeight: 1.4, color: 'var(--dt-destructive)', overflowWrap: 'anywhere' }, children: String(error) }, `error-${index}`)
+            )
+          }, 'errors')
+        : null,
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 8, paddingTop: 3, flexWrap: 'wrap' },
+        children: [
+          jsx(Button, {
+            type: 'button',
+            variant: 'secondary',
+            size: 'xs',
+            onClick: copy,
+            children: 'Copy setup'
+          }, 'copy'),
+          docs
+            ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere', minWidth: 0 }, children: docs }, 'docs')
+            : null
+        ]
+      })
+    ]
+  })
+}
+
+function CatalogSection({ catalog }) {
+  if (!catalog || !Array.isArray(catalog.definitions)) return null
+  const definitions = catalog.definitions
+  const pending = definitions.filter(entry => entry?.state !== 'connected')
+  const connected = definitions.length - pending.length
+  const availableCount = definitions.filter(entry => entry?.state === 'available').length
+  const readyCount = definitions.filter(entry => entry?.state === 'ready').length
+  const invalidCount = definitions.filter(entry => entry?.state === 'invalid').length
+  const setupSummary = [
+    availableCount > 0 ? `${availableCount} to connect` : null,
+    readyCount > 0 ? `${readyCount} ready` : null,
+    invalidCount > 0 ? `${invalidCount} invalid` : null,
+    `${connected} connected`
+  ].filter(Boolean).join(' · ')
+  const directory = catalog.directory || '$HERMES_HOME/provider-usage/providers'
+  return jsxs('section', {
+    'aria-labelledby': 'provider-usage-catalog-heading',
+    style: { padding: '15px 18px 18px', borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, {
+        aside: definitions.length > 0 ? setupSummary : null,
+        children: 'Available to connect'
+      }, 'title'),
+      jsx('span', {
+        style: { ...textTertiary, fontSize: 10.5, lineHeight: 1.5, paddingTop: 4 },
+        children: 'Read-only JSON definitions. No scripts, no eval, and never a credential value in the file.'
+      }, 'intro'),
+      pending.length > 0
+        ? jsx('div', {
+            style: { display: 'grid', gap: 8, paddingTop: 10 },
+            children: pending.map(entry => jsx(CatalogCard, { entry }, entry.id))
+          }, 'cards')
+        : jsx('div', {
+            style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, paddingTop: 10 },
+            children: definitions.length > 0
+              ? 'All catalog definitions are connected. Add another JSON file to extend the list.'
+              : 'No declarative definitions yet. Add a JSON file to the folder below, then refresh.'
+          }, 'empty'),
+      jsxs('div', {
+        style: { ...textQuaternary, fontSize: 9, lineHeight: 1.5, paddingTop: 12, overflowWrap: 'anywhere' },
+        children: [
+          jsx('span', { children: `Folder: ${directory}` }, 'folder'),
+          jsx('span', { children: ' · Template: dashboard/definitions/TEMPLATE.json' }, 'template')
+        ]
+      }, 'footer')
+    ]
+  })
+}
+
 function ProviderUsagePage({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
@@ -1926,7 +2218,8 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
               children: `Credentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.`
             }, 'footer')
           ]
-        }, 'accounts')
+        }, 'accounts'),
+        jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog')
       ]
     })
   }
@@ -1937,7 +2230,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   })
 }
 
-export { activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { CatalogSection, DefinitionBadge, DefinitionPanel, activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

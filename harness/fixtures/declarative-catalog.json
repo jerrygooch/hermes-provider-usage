@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "definitions_version": 1,
+  "fetched_at": "2026-11-11T02:03:07Z",
+  "account_profile": "default",
+  "active": {
+    "provider": "github-rate-limit",
+    "model": "mimo-v2.5"
+  },
+  "default_provider": "github-rate-limit",
+  "providers": [
+    {
+      "id": "github-rate-limit",
+      "label": "GitHub API rate limit",
+      "definition": true,
+      "definition_id": "github-rate-limit",
+      "definition_version": 1,
+      "definition_source": "bundled",
+      "state": "ok",
+      "available": true,
+      "capability": "usage",
+      "plan": "Rate limit",
+      "limits": [
+        {
+          "id": "default",
+          "label": "GitHub REST API",
+          "windows": [
+            {
+              "label": "Core",
+              "kind": "rolling",
+              "rolling": true,
+              "unit": "requests",
+              "used": 5,
+              "limit": 60,
+              "remaining": 55,
+              "used_percent": 8.33,
+              "remaining_percent": 91.67,
+              "reset_at": "2026-11-11T03:03:07Z",
+              "detail": "5 of 60 requests"
+            },
+            {
+              "label": "Search",
+              "kind": "rolling",
+              "rolling": true,
+              "unit": "requests",
+              "used": 1,
+              "limit": 10,
+              "remaining": 9,
+              "used_percent": 10,
+              "remaining_percent": 90,
+              "reset_at": "2026-11-11T02:04:07Z",
+              "detail": "1 of 10 requests"
+            },
+            {
+              "label": "GraphQL",
+              "kind": "rolling",
+              "rolling": true,
+              "unit": "requests",
+              "used": 0,
+              "limit": 0,
+              "remaining": 0,
+              "used_percent": null,
+              "remaining_percent": null,
+              "reset_at": "2026-11-11T03:03:07Z",
+              "detail": "No allowance reported"
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": [
+        "GitHub REST API request windows for this machine's IP. Not an inference allowance."
+      ],
+      "provenance": {
+        "kind": "declarative",
+        "definition_id": "github-rate-limit",
+        "definition_version": 1,
+        "definition_source": "bundled",
+        "definition_file": "github-rate-limit.json",
+        "docs_url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+        "endpoint_host": "api.github.com",
+        "fetched_at": "2026-11-11T02:03:07Z",
+        "checked_at": "2026-11-11T02:03:08Z",
+        "cache": "hit",
+        "ttl_seconds": 60,
+        "scope": "default",
+        "overrides": null
+      },
+      "freshness": {
+        "fetched_at": "2026-11-11T02:03:07Z",
+        "age_seconds": 42,
+        "stale": false,
+        "ttl_seconds": 60
+      }
+    },
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "SuperGrok",
+          "windows": [
+            {
+              "label": "Subscription window",
+              "remaining_percent": 62,
+              "reset_at": "2026-11-12T00:00:00Z"
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": []
+    }
+  ],
+  "catalog": {
+    "version": 1,
+    "profile": "default",
+    "directory": "$HERMES_HOME/provider-usage/providers",
+    "bundled_count": 3,
+    "profile_count": 1,
+    "counts": {
+      "connected": 2,
+      "available": 2,
+      "invalid": 1
+    },
+    "definitions": [
+      {
+        "id": "github-rate-limit",
+        "name": "GitHub API rate limit",
+        "state": "connected",
+        "source": "bundled",
+        "stability": "stable",
+        "version": 1,
+        "host": "api.github.com",
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "github-rate-limit.json"
+        }
+      },
+      {
+        "id": "moonshot-balance",
+        "name": "Moonshot / Kimi balance",
+        "description": "Prepaid API balance reported by the Moonshot Open Platform (Kimi). Requires an API key created on the matching platform.",
+        "state": "available",
+        "source": "bundled",
+        "stability": "stable",
+        "version": 1,
+        "host": "api.moonshot.ai",
+        "docs_url": "https://platform.kimi.ai/docs/api/balance",
+        "missing_credentials": [
+          "MOONSHOT_API_KEY"
+        ],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "moonshot-balance.json"
+        }
+      },
+      {
+        "id": "elevenlabs-subscription",
+        "name": "ElevenLabs subscription",
+        "description": "Character allowance and reset for the current ElevenLabs subscription, with voice-slot details.",
+        "state": "available",
+        "source": "bundled",
+        "stability": "stable",
+        "version": 1,
+        "host": "api.elevenlabs.io",
+        "docs_url": "https://elevenlabs.io/docs/api-reference/user/subscription/get",
+        "missing_credentials": [
+          "ELEVENLABS_API_KEY"
+        ],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "elevenlabs-subscription.json"
+        }
+      },
+      {
+        "id": "my-team-usage",
+        "name": "My team usage",
+        "state": "invalid",
+        "source": "profile",
+        "file": "my-team-usage.json",
+        "errors": [
+          "mapping.windows[0].label: must not be empty",
+          "request.hosts: must include the request host 'api.example.com'"
+        ],
+        "warnings": []
+      }
+    ]
+  },
+  "host": {
+    "model": "mimo-v2.5",
+    "sessionId": "sess-def",
+    "profile": "default",
+    "connectionId": "local",
+    "gateway": "open",
+    "focusedSessionProfile": "default",
+    "focusedSessionOwner": {
+      "connectionId": "local",
+      "profile": "default"
+    }
+  }
+}

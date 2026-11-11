@@ -140,6 +140,8 @@ const cases = [
   ['OpenCode Go shows every subscription window', compactFundingSummary(opencodeGo, 'mimo-v2.5'), '5h 100% · wk 100% · mo 85%'],
   ['OpenCode Zen never invents a credit balance', compactFundingSummary(opencodeZen, 'kimi-k2.5'), 'Zen balance unavailable'],
   ['Ollama Cloud monthly credits stay visible in the chip', compactFundingSummary(ollamaCloud, 'glm-5.3-flash'), 'mo 100%'],
+  ['Missing percentage is skipped, never turned into 0%', compactFundingSummary({ id: 'github-rate-limit', label: 'GitHub', available: true, limits: [{ id: 'default', label: 'Rate limit', windows: [{ label: 'Core', unit: 'requests', remaining_percent: 50 }, { label: 'GraphQL', unit: 'requests', used: 0, limit: 0, remaining_percent: null }] }] }, ''), 'Core 50%'],
+  ['Only-unknown windows do not invent a meter', compactFundingSummary({ id: 'github-rate-limit', label: 'GitHub', available: true, limits: [{ id: 'default', label: 'Rate limit', windows: [{ label: 'GraphQL', unit: 'requests', used: 0, limit: 0, remaining_percent: null }] }] }, ''), 'available'],
   ['Ollama Cloud legacy plans keep every reported window', compactFundingSummary(ollamaCloudLegacy, 'glm-5.3-flash'), '5h 98% · wk 84% · mo 62%'],
   ['Ollama Cloud does not invent windows for an empty account', compactFundingSummary(ollamaCloudEmpty, 'glm-5.3-flash'), 'limited data']
 ]

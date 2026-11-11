@@ -30,7 +30,13 @@ fs.mkdirSync(shots, { recursive: true })
 // Portable defaults: never hardcode a personal user path. HERMES_AGENT_ROOT may
 // point at any checkout; CHROME may point at any Chrome binary. Both resolve to
 // the standard-machine path when the env var is unset.
-const CHROME = process.env.HARNESS_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+const CHROME_CANDIDATES = [
+  process.env.HARNESS_CHROME,
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe'
+].filter(Boolean)
+const CHROME = CHROME_CANDIDATES.find(candidate => fs.existsSync(candidate)) || CHROME_CANDIDATES[0]
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
 
 // Import the hermes-agent CDP client by absolute path.

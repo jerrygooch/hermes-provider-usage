@@ -1,0 +1,43 @@
+{
+  "schema": "hermes.provider-usage.definition/1",
+  "id": "elevenlabs-subscription",
+  "name": "ElevenLabs subscription",
+  "description": "Character allowance and reset for the current ElevenLabs subscription, with voice-slot details. Requires an ElevenLabs API key.",
+  "version": 1,
+  "docs_url": "https://elevenlabs.io/docs/api-reference/user/subscription/get",
+  "scope_note": "Workspace subscription allowance. Character refreshes follow the plan's billing period.",
+  "stability": "stable",
+  "request": {
+    "url": "https://api.elevenlabs.io/v1/user/subscription",
+    "method": "GET",
+    "hosts": ["api.elevenlabs.io"],
+    "headers": [
+      {
+        "name": "xi-api-key",
+        "credential": {"source": "env", "name": "ELEVENLABS_API_KEY"}
+      }
+    ]
+  },
+  "cache_ttl_seconds": 300,
+  "mapping": {
+    "title": "ElevenLabs",
+    "plan": {"path": "tier"},
+    "windows": [
+      {
+        "label": "Characters",
+        "kind": "monthly",
+        "rolling": false,
+        "unit": "characters",
+        "used": {"path": "character_count"},
+        "limit": {"path": "character_limit"},
+        "reset_at": {"path": "next_character_count_reset_unix", "format": "unix"}
+      }
+    ],
+    "details": [
+      {"path": "status", "prefix": "Subscription status: "},
+      {"path": "character_refresh_period", "prefix": "Refresh period: "},
+      {"path": "voice_slots_used", "prefix": "Voice slots used: "},
+      {"path": "voice_limit", "prefix": "Voice slot limit: "}
+    ]
+  }
+}

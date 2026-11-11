@@ -1,0 +1,54 @@
+{
+  "schema": "hermes.provider-usage.definition/1",
+  "id": "moonshot-balance",
+  "name": "Moonshot / Kimi balance",
+  "description": "Prepaid API balance reported by the Moonshot Open Platform (Kimi). Requires an API key created on the matching platform.",
+  "version": 1,
+  "docs_url": "https://platform.kimi.ai/docs/api/balance",
+  "scope_note": "Account-level prepaid API balance in USD; keys from platform.kimi.ai and platform.kimi.com are separate.",
+  "stability": "stable",
+  "request": {
+    "url": "https://api.moonshot.ai/v1/users/me/balance",
+    "method": "GET",
+    "hosts": ["api.moonshot.ai"],
+    "headers": [
+      {
+        "name": "Authorization",
+        "prefix": "Bearer ",
+        "credential": {"source": "env", "name": "MOONSHOT_API_KEY"}
+      }
+    ]
+  },
+  "cache_ttl_seconds": 120,
+  "mapping": {
+    "title": "Moonshot API",
+    "plan": {"value": "Prepaid API credits"},
+    "balances": [
+      {
+        "label": "Available balance",
+        "amount": {"path": "data.available_balance"},
+        "currency": "USD",
+        "unit": "currency",
+        "kind": "credit"
+      },
+      {
+        "label": "Voucher balance",
+        "amount": {"path": "data.voucher_balance"},
+        "currency": "USD",
+        "unit": "currency",
+        "kind": "grant"
+      },
+      {
+        "label": "Cash balance",
+        "amount": {"path": "data.cash_balance"},
+        "currency": "USD",
+        "unit": "currency",
+        "kind": "wallet"
+      }
+    ],
+    "details": [
+      {"path": "status", "prefix": "Request status: "},
+      {"path": "scode", "prefix": "Status code: "}
+    ]
+  }
+}

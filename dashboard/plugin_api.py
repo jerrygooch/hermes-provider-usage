@@ -5,20 +5,24 @@ credentials are resolved by Hermes' existing runtime/auth machinery and never
 cross the plugin API boundary or enter the returned JSON.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
+import copy
+import hashlib
 import html
+import ipaddress
 import json
 import logging
 import math
+import os
 import re
+import socket
 import struct
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Body
@@ -1145,7 +1149,1489 @@ def _fetch_ollama_cloud() -> dict[str, Any]:
     return row
 
 
-def _fetch_provider(provider: str) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Declarative provider definitions
+#
+# A definition is versioned JSON data: a fixed HTTPS GET, a credential
+# reference (never a literal secret), and path-only mappings into the JSON
+# response. There is no eval, no script hook, and no arbitrary header value.
+# The bundled catalog ships with the plugin; profile-local files live under
+# $HERMES_HOME/provider-usage/providers/*.json and may override a bundled entry
+# only with an explicit `"override": true`.
+# ---------------------------------------------------------------------------
+
+_DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
+_PLUGIN_VERSION = "0.10.0"
+_DEFINITION_MAX_BYTES = 512 * 1024
+_DEFINITION_TIMEOUT_SECS = 10.0
+_DEFINITION_MAX_FILE_BYTES = 128 * 1024
+_DEFINITION_CACHE: dict[str, dict[str, Any]] = {}
+_DEFINITION_CACHE_LOCK = threading.Lock()
+_DEFINITION_TRANSPORT: Any = None  # test seam; production leaves this None
+_DEFINITION_RESERVED_IDS = set(_SUPPORTED) | set(_PROVIDER_LABELS) | {v for v in _ALIASES.values() if v}
+_DEFINITION_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
+_DEFINITION_PATH_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_DEFINITION_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
+_DEFINITION_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+_DEFINITION_HEADER_RE = re.compile(r"^[A-Za-z0-9-]{1,60}$")
+_DEFINITION_UNITS = {"percent", "requests", "tokens", "characters", "usd", "credits", "custom"}
+_DEFINITION_WINDOW_KINDS = {"five_hour", "daily", "weekly", "monthly", "rolling", "custom"}
+_DEFINITION_BALANCE_UNITS = {"currency", "credits", "custom"}
+_DEFINITION_BALANCE_KINDS = {"credit", "wallet", "grant", "custom"}
+_DEFINITION_FORBIDDEN_HEADERS = {
+    "host", "content-length", "connection", "transfer-encoding", "cookie",
+    "set-cookie", "accept", "user-agent", "authorization-fingerprint",
+}
+_DEFINITION_SECRET_HINTS = re.compile(r"(api[_-]?key|token|secret|password|bearer)", re.IGNORECASE)
+
+
+class _DefinitionError(Exception):
+    """A definition fetch failed in a user-visible, non-secret way."""
+
+    def __init__(self, state: str, message: str) -> None:
+        super().__init__(message)
+        self.state = state
+        self.message = message
+
+
+def _definition_bundled_dir() -> Path:
+    return Path(__file__).resolve().parent / "definitions" / "catalog"
+
+
+def _definition_profile_dir() -> Path:
+    override = str(os.environ.get("HERMES_PROVIDER_USAGE_DEFINITIONS") or "").strip()
+    if override:
+        return Path(override)
+    try:
+        from hermes_constants import get_hermes_home
+
+        return Path(get_hermes_home()) / "provider-usage" / "providers"
+    except Exception:
+        return Path.home() / ".hermes" / "provider-usage" / "providers"
+
+
+def _definition_error(errors: list[str], path: str, message: str) -> None:
+    errors.append(f"{path}: {message}")
+
+
+def _definition_unknown_keys(value: dict[str, Any], allowed: set[str], path: str, errors: list[str]) -> None:
+    for key in sorted(set(value) - allowed):
+        _definition_error(errors, f"{path}.{key}", "unknown key")
+
+
+def _definition_text(value: Any, path: str, errors: list[str], *, required: bool = False, limit: int = 300) -> Optional[str]:
+    if value is None:
+        if required:
+            _definition_error(errors, path, "is required")
+        return None
+    if not isinstance(value, str):
+        _definition_error(errors, path, "must be a string")
+        return None
+    text = value.strip()
+    if not text:
+        if required:
+            _definition_error(errors, path, "must not be empty")
+        return None
+    if len(text) > limit:
+        _definition_error(errors, path, f"must be at most {limit} characters")
+        return None
+    if "\n" in text or "\r" in text:
+        _definition_error(errors, path, "must be a single line")
+        return None
+    return text
+
+
+def _definition_bool(value: Any, path: str, errors: list[str], *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        _definition_error(errors, path, "must be true or false")
+        return default
+    return value
+
+
+def _definition_int(value: Any, path: str, errors: list[str], *, minimum: int, maximum: int) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int):
+        _definition_error(errors, path, "must be an integer")
+        return None
+    if value < minimum or value > maximum:
+        _definition_error(errors, path, f"must be between {minimum} and {maximum}")
+        return None
+    return value
+
+
+def _definition_affix(value: Any, path: str, errors: list[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        _definition_error(errors, path, "must be a string")
+        return None
+    if len(value) > 40:
+        _definition_error(errors, path, "must be at most 40 characters")
+        return None
+    if "\n" in value or "\r" in value:
+        _definition_error(errors, path, "must not contain line breaks")
+        return None
+    return value
+
+
+def _definition_path(value: Any, path: str, errors: list[str]) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        _definition_error(errors, path, "must be a dot-separated JSON path")
+        return None
+    text = value.strip()
+    if len(text) > 180:
+        _definition_error(errors, path, "path is too long")
+        return None
+    parts = text.split(".")
+    if len(parts) > 8:
+        _definition_error(errors, path, "path is too deep (max 8 segments)")
+        return None
+    for part in parts:
+        if part.lower() in {"__proto__", "prototype", "constructor"}:
+            _definition_error(errors, path, f"reserved path segment '{part}'")
+            return None
+        if not _DEFINITION_PATH_RE.fullmatch(part):
+            _definition_error(errors, path, f"invalid path segment '{part}' (use letters, digits, _ or -)")
+            return None
+    return text
+
+
+def _definition_host(value: Any, path: str, errors: list[str]) -> Optional[str]:
+    text = _definition_text(value, path, errors, required=True, limit=253)
+    if not text:
+        return None
+    host = text.lower()
+    if host != text:
+        _definition_error(errors, path, "must be lowercase")
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        _definition_error(errors, path, "must be a public DNS hostname, not an IP address")
+        return None
+    if not _DEFINITION_HOST_RE.fullmatch(host):
+        _definition_error(errors, path, "must be a public DNS hostname")
+        return None
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".lan", ".home", ".localhost")):
+        _definition_error(errors, path, "local/private hostnames are not allowed")
+        return None
+    return host
+
+
+def _definition_https_url(value: Any, path: str, errors: list[str]) -> Optional[dict[str, Any]]:
+    text = _definition_text(value, path, errors, required=True, limit=500)
+    if not text:
+        return None
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        _definition_error(errors, path, "is not a valid URL")
+        return None
+    if parsed.scheme.lower() != "https":
+        _definition_error(errors, path, "must use https")
+        return None
+    if parsed.username or parsed.password:
+        _definition_error(errors, path, "must not contain user information")
+        return None
+    if parsed.query or parsed.fragment:
+        _definition_error(errors, path, "query strings and fragments are not supported (schema v1)")
+        return None
+    if parsed.port not in (None, 443):
+        _definition_error(errors, path, "must use the default HTTPS port 443")
+        return None
+    if not parsed.path.startswith("/") or ".." in parsed.path.split("/"):
+        _definition_error(errors, path, "must have an absolute path without '..'")
+        return None
+    host = _definition_host(parsed.hostname, f"{path}.host", errors)
+    if not host:
+        return None
+    return {"url": text, "host": host, "path": parsed.path}
+
+
+def _definition_field(
+    value: Any,
+    path: str,
+    errors: list[str],
+    *,
+    kind: str,
+    required: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Validate a path field. kind is string, number, or reset."""
+    if value is None:
+        if required:
+            _definition_error(errors, path, "is required")
+        return None
+    if isinstance(value, str):
+        if kind != "string":
+            _definition_error(errors, path, "must be an object with a path")
+            return None
+        text = _definition_text(value, path, errors, required=True, limit=300)
+        return {"value": text} if text else None
+    if not isinstance(value, dict):
+        _definition_error(errors, path, "must be a string or an object with a path")
+        return None
+    allowed = {"path", "format", "prefix", "suffix", "value"} if kind == "string" else {"path", "format"}
+    _definition_unknown_keys(value, allowed, path, errors)
+    if ("path" in value) == ("value" in value):
+        _definition_error(errors, path, "needs exactly one of path or value")
+        return None
+    if "value" in value:
+        if kind != "string":
+            _definition_error(errors, f"{path}.value", "static values are not allowed for numbers")
+            return None
+        text = _definition_text(value.get("value"), f"{path}.value", errors, required=True, limit=300)
+        return {"value": text} if text else None
+    json_path = _definition_path(value.get("path"), f"{path}.path", errors)
+    if not json_path:
+        return None
+    result: dict[str, Any] = {"path": json_path}
+    fmt = value.get("format")
+    if kind == "number":
+        if fmt not in (None, "number"):
+            _definition_error(errors, f"{path}.format", "only 'number' is supported")
+        result["format"] = "number"
+    elif kind == "reset":
+        if fmt not in (None, "iso", "unix", "unix_ms"):
+            _definition_error(errors, f"{path}.format", "must be iso, unix, or unix_ms")
+        result["format"] = fmt or "iso"
+    else:
+        if fmt is not None:
+            _definition_error(errors, f"{path}.format", "format is not supported for text fields")
+        prefix = _definition_affix(value.get("prefix"), f"{path}.prefix", errors)
+        suffix = _definition_affix(value.get("suffix"), f"{path}.suffix", errors)
+        if prefix:
+            result["prefix"] = prefix
+        if suffix:
+            result["suffix"] = suffix
+    return result
+
+
+def _definition_currency(value: Any, path: str, errors: list[str], *, required: bool) -> Optional[dict[str, Any]]:
+    if value is None:
+        if required:
+            _definition_error(errors, path, "is required for money/credit units")
+        return None
+    if isinstance(value, str):
+        text = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", text):
+            _definition_error(errors, path, "must be a three-letter currency code")
+            return None
+        return {"value": text}
+    field = _definition_field(value, path, errors, kind="string")
+    if field and "value" in field:
+        text = str(field["value"]).upper()
+        if not re.fullmatch(r"[A-Z]{3}", text):
+            _definition_error(errors, path, "must be a three-letter currency code")
+            return None
+        field["value"] = text
+    return field
+
+
+def _definition_credential(value: Any, path: str, errors: list[str]) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        _definition_error(errors, path, "must be a credential reference object")
+        return None
+    _definition_unknown_keys(value, {"source", "name", "provider", "field"}, path, errors)
+    source = value.get("source")
+    if source == "env":
+        if "provider" in value or "field" in value:
+            _definition_error(errors, path, "env credentials use only source + name")
+        name = _definition_text(value.get("name"), f"{path}.name", errors, required=True, limit=64)
+        if name and not _DEFINITION_ENV_RE.fullmatch(name):
+            _definition_error(errors, f"{path}.name", "must be an environment variable name (A-Z, 0-9, _)")
+            return None
+        return {"source": "env", "name": name} if name else None
+    if source == "hermes_provider":
+        if "name" in value:
+            _definition_error(errors, path, "hermes_provider credentials use provider + field")
+        provider = _definition_text(value.get("provider"), f"{path}.provider", errors, required=True, limit=80)
+        if provider and not _DEFINITION_SLUG_RE.fullmatch(provider):
+            _definition_error(errors, f"{path}.provider", "must be a provider slug")
+            provider = None
+        field = value.get("field")
+        if field not in {"api_key", "access_token"}:
+            _definition_error(errors, f"{path}.field", "must be api_key or access_token")
+            field = None
+        return {"source": "hermes_provider", "provider": provider, "field": field} if provider and field else None
+    _definition_error(errors, f"{path}.source", "must be env or hermes_provider")
+    return None
+
+
+def _definition_headers(value: Any, path: str, errors: list[str]) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        _definition_error(errors, path, "must be a list")
+        return []
+    if len(value) > 6:
+        _definition_error(errors, path, "at most 6 headers are supported")
+        return []
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        prefix = f"{path}[{index}]"
+        if not isinstance(item, dict):
+            _definition_error(errors, prefix, "must be an object")
+            continue
+        _definition_unknown_keys(item, {"name", "credential", "prefix"}, prefix, errors)
+        name = _definition_text(item.get("name"), f"{prefix}.name", errors, required=True, limit=60)
+        if not name or not _DEFINITION_HEADER_RE.fullmatch(name):
+            if name:
+                _definition_error(errors, f"{prefix}.name", "is not a valid header name")
+            continue
+        lowered = name.lower()
+        if lowered in _DEFINITION_FORBIDDEN_HEADERS:
+            _definition_error(errors, f"{prefix}.name", f"'{name}' is set by the client and cannot be overridden")
+            continue
+        if lowered in seen:
+            _definition_error(errors, f"{prefix}.name", "duplicate header")
+            continue
+        seen.add(lowered)
+        credential = _definition_credential(item.get("credential"), f"{prefix}.credential", errors)
+        if not credential:
+            continue
+        header_prefix = _definition_affix(item.get("prefix"), f"{prefix}.prefix", errors) or ""
+        if errors and any(str(error).startswith(f"{prefix}.prefix:") for error in errors):
+            continue
+        result.append({"name": name, "credential": credential, "prefix": header_prefix or ""})
+    return result
+
+
+def _definition_window(
+    value: Any,
+    path: str,
+    errors: list[str],
+    *,
+    from_items: bool,
+) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        _definition_error(errors, path, "must be an object")
+        return None
+    allowed = {
+        "label", "kind", "rolling", "period_seconds", "unit", "currency",
+        "limit", "used", "remaining", "used_percent", "remaining_percent",
+        "reset_at", "detail",
+    }
+    _definition_unknown_keys(value, allowed, path, errors)
+
+    label: Any = None
+    if from_items:
+        label = _definition_field(value.get("label"), f"{path}.label", errors, kind="string", required=True)
+        if not label:
+            return None
+    else:
+        label = _definition_text(value.get("label"), f"{path}.label", errors, required=True, limit=60)
+        if not label:
+            return None
+
+    kind = value.get("kind") or "custom"
+    if kind not in _DEFINITION_WINDOW_KINDS:
+        _definition_error(errors, f"{path}.kind", f"must be one of {sorted(_DEFINITION_WINDOW_KINDS)}")
+        kind = "custom"
+    rolling = _definition_bool(value.get("rolling"), f"{path}.rolling", errors, default=True)
+    period = None
+    if value.get("period_seconds") is not None:
+        period = _definition_int(value.get("period_seconds"), f"{path}.period_seconds", errors, minimum=60, maximum=31_536_000)
+    unit = value.get("unit") or "percent"
+    if unit not in _DEFINITION_UNITS:
+        _definition_error(errors, f"{path}.unit", f"must be one of {sorted(_DEFINITION_UNITS)}")
+        unit = "custom"
+    currency = _definition_currency(value.get("currency"), f"{path}.currency", errors, required=unit in {"usd", "credits"})
+
+    numeric = {}
+    for key in ("limit", "used", "remaining", "used_percent", "remaining_percent"):
+        field = _definition_field(value.get(key), f"{path}.{key}", errors, kind="number")
+        if field:
+            numeric[key] = field
+    if not numeric:
+        _definition_error(errors, path, "needs at least one of limit, used, remaining, used_percent, remaining_percent")
+    reset = _definition_field(value.get("reset_at"), f"{path}.reset_at", errors, kind="reset")
+    detail = _definition_field(value.get("detail"), f"{path}.detail", errors, kind="string")
+
+    window: dict[str, Any] = {
+        "label": label,
+        "kind": kind,
+        "rolling": rolling,
+        "unit": unit,
+        "numeric": numeric,
+        "reset_at": reset,
+        "detail": detail,
+    }
+    if period is not None:
+        window["period_seconds"] = period
+    if currency:
+        window["currency"] = currency
+    return window
+
+
+def _definition_balance(value: Any, path: str, errors: list[str]) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        _definition_error(errors, path, "must be an object")
+        return None
+    _definition_unknown_keys(value, {"label", "amount", "currency", "unit", "kind", "detail"}, path, errors)
+    label = _definition_text(value.get("label"), f"{path}.label", errors, required=True, limit=60)
+    if not label:
+        return None
+    amount = _definition_field(value.get("amount"), f"{path}.amount", errors, kind="number", required=True)
+    if not amount:
+        return None
+    unit = value.get("unit") or "currency"
+    if unit not in _DEFINITION_BALANCE_UNITS:
+        _definition_error(errors, f"{path}.unit", f"must be one of {sorted(_DEFINITION_BALANCE_UNITS)}")
+        unit = "currency"
+    kind = value.get("kind") or "credit"
+    if kind not in _DEFINITION_BALANCE_KINDS:
+        _definition_error(errors, f"{path}.kind", f"must be one of {sorted(_DEFINITION_BALANCE_KINDS)}")
+        kind = "credit"
+    currency = _definition_currency(value.get("currency"), f"{path}.currency", errors, required=True)
+    detail = _definition_field(value.get("detail"), f"{path}.detail", errors, kind="string")
+    return {
+        "label": label,
+        "amount": amount,
+        "currency": currency,
+        "unit": unit,
+        "kind": kind,
+        "detail": detail,
+    }
+
+
+def _definition_detail(value: Any, path: str, errors: list[str]) -> Optional[dict[str, Any]]:
+    if isinstance(value, str):
+        text = _definition_text(value, path, errors, required=True, limit=200)
+        return {"value": text} if text else None
+    if not isinstance(value, dict):
+        _definition_error(errors, path, "must be a string or an object")
+        return None
+    _definition_unknown_keys(value, {"path", "value", "prefix", "suffix"}, path, errors)
+    if ("path" in value) == ("value" in value):
+        _definition_error(errors, path, "needs exactly one of path or value")
+        return None
+    if "value" in value:
+        text = _definition_text(value.get("value"), f"{path}.value", errors, required=True, limit=200)
+        return {"value": text} if text else None
+    json_path = _definition_path(value.get("path"), f"{path}.path", errors)
+    if not json_path:
+        return None
+    prefix = _definition_affix(value.get("prefix"), f"{path}.prefix", errors)
+    suffix = _definition_affix(value.get("suffix"), f"{path}.suffix", errors)
+    result: dict[str, Any] = {"path": json_path}
+    if prefix:
+        result["prefix"] = prefix
+    if suffix:
+        result["suffix"] = suffix
+    return result
+
+
+def _validate_definition(
+    raw: Any,
+    *,
+    source: str,
+    allow_override: bool,
+) -> tuple[Optional[dict[str, Any]], list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not isinstance(raw, dict):
+        return None, ["definition: must be a JSON object"], warnings
+    allowed = {
+        "schema", "id", "name", "description", "version", "docs_url",
+        "request", "cache_ttl_seconds", "mapping", "scope_note",
+        "stability", "override", "author", "license",
+    }
+    _definition_unknown_keys(raw, allowed, "definition", errors)
+
+    if raw.get("schema") != _DEFINITION_SCHEMA:
+        _definition_error(errors, "schema", f"must be '{_DEFINITION_SCHEMA}'")
+    ident = _definition_text(raw.get("id"), "id", errors, required=True, limit=40)
+    if ident and not _DEFINITION_SLUG_RE.fullmatch(ident):
+        _definition_error(errors, "id", "must be a lowercase slug (letters, digits, hyphen)")
+        ident = None
+    if ident and (_canonical(ident) in _SUPPORTED or ident in _DEFINITION_RESERVED_IDS):
+        _definition_error(errors, "id", f"'{ident}' is reserved for a built-in provider; choose a unique id")
+    name = _definition_text(raw.get("name"), "name", errors, required=True, limit=80)
+    description = _definition_text(raw.get("description"), "description", errors, limit=400)
+    version = _definition_int(raw.get("version"), "version", errors, minimum=1, maximum=9999)
+    docs_url = _definition_https_url(raw.get("docs_url"), "docs_url", errors)
+    scope_note = _definition_text(raw.get("scope_note"), "scope_note", errors, limit=200)
+    stability = raw.get("stability") or "experimental"
+    if stability not in {"stable", "experimental"}:
+        _definition_error(errors, "stability", "must be stable or experimental")
+        stability = "experimental"
+    author = _definition_text(raw.get("author"), "author", errors, limit=80)
+    license_name = _definition_text(raw.get("license"), "license", errors, limit=40)
+    override = raw.get("override", False)
+    if not isinstance(override, bool):
+        _definition_error(errors, "override", "must be true or false")
+        override = False
+    if override and not allow_override:
+        _definition_error(errors, "override", "is only allowed for profile-local definitions")
+    if not override and allow_override:
+        pass
+
+    request_raw = raw.get("request")
+    request: Optional[dict[str, Any]] = None
+    if not isinstance(request_raw, dict):
+        _definition_error(errors, "request", "must be an object")
+    else:
+        _definition_unknown_keys(request_raw, {"url", "method", "hosts", "headers"}, "request", errors)
+        url = _definition_https_url(request_raw.get("url"), "request.url", errors)
+        method = request_raw.get("method") or "GET"
+        if method != "GET":
+            _definition_error(errors, "request.method", "only GET is supported (read-only schema v1)")
+        hosts_raw = request_raw.get("hosts")
+        hosts: list[str] = []
+        if not isinstance(hosts_raw, list) or not hosts_raw:
+            _definition_error(errors, "request.hosts", "must be a non-empty list of HTTPS hosts")
+        else:
+            if len(hosts_raw) > 4:
+                _definition_error(errors, "request.hosts", "at most 4 hosts are supported")
+            for index, item in enumerate(hosts_raw[:4]):
+                host = _definition_host(item, f"request.hosts[{index}]", errors)
+                if host and host not in hosts:
+                    hosts.append(host)
+        if url and url["host"] not in hosts:
+            _definition_error(errors, "request.hosts", f"must include the request host '{url['host']}'")
+        headers = _definition_headers(request_raw.get("headers"), "request.headers", errors)
+        if url and method == "GET":
+            request = {"url": url["url"], "host": url["host"], "method": "GET", "headers": headers}
+
+    ttl = raw.get("cache_ttl_seconds", 300)
+    if isinstance(ttl, bool) or not isinstance(ttl, int):
+        _definition_error(errors, "cache_ttl_seconds", "must be an integer")
+        ttl = 300
+    elif ttl < 30 or ttl > 86_400:
+        _definition_error(errors, "cache_ttl_seconds", "must be between 30 and 86400 seconds")
+        ttl = 300
+
+    mapping_raw = raw.get("mapping")
+    mapping: Optional[dict[str, Any]] = None
+    if not isinstance(mapping_raw, dict):
+        _definition_error(errors, "mapping", "must be an object")
+    else:
+        _definition_unknown_keys(mapping_raw, {"title", "plan", "scope_note", "windows", "windows_from", "balances", "details"}, "mapping", errors)
+        title = _definition_text(mapping_raw.get("title"), "mapping.title", errors, limit=80)
+        plan = _definition_field(mapping_raw.get("plan"), "mapping.plan", errors, kind="string")
+        mapping_scope = _definition_text(mapping_raw.get("scope_note"), "mapping.scope_note", errors, limit=200)
+        windows: list[dict[str, Any]] = []
+        windows_from: Optional[dict[str, Any]] = None
+        if mapping_raw.get("windows") is not None and mapping_raw.get("windows_from") is not None:
+            _definition_error(errors, "mapping", "use either windows or windows_from, not both")
+        elif mapping_raw.get("windows") is not None:
+            raw_windows = mapping_raw.get("windows")
+            if not isinstance(raw_windows, list) or not raw_windows:
+                _definition_error(errors, "mapping.windows", "must be a non-empty list")
+            else:
+                if len(raw_windows) > 12:
+                    _definition_error(errors, "mapping.windows", "at most 12 windows are supported")
+                for index, item in enumerate(raw_windows[:12]):
+                    window = _definition_window(item, f"mapping.windows[{index}]", errors, from_items=False)
+                    if window:
+                        windows.append(window)
+        elif mapping_raw.get("windows_from") is not None:
+            raw_from = mapping_raw.get("windows_from")
+            if not isinstance(raw_from, dict):
+                _definition_error(errors, "mapping.windows_from", "must be an object")
+            else:
+                _definition_unknown_keys(
+                    raw_from,
+                    {"path", "label", "kind", "rolling", "period_seconds", "unit", "currency", "limit", "used", "remaining", "used_percent", "remaining_percent", "reset_at", "detail"},
+                    "mapping.windows_from",
+                    errors,
+                )
+                item_path = _definition_path(raw_from.get("path"), "mapping.windows_from.path", errors)
+                if item_path:
+                    spec = {key: value for key, value in raw_from.items() if key != "path"}
+                    window = _definition_window(spec, "mapping.windows_from", errors, from_items=True)
+                    if window:
+                        windows_from = {"path": item_path, "spec": window}
+        balances: list[dict[str, Any]] = []
+        raw_balances = mapping_raw.get("balances")
+        if raw_balances is not None:
+            if not isinstance(raw_balances, list):
+                _definition_error(errors, "mapping.balances", "must be a list")
+            else:
+                if len(raw_balances) > 10:
+                    _definition_error(errors, "mapping.balances", "at most 10 balances are supported")
+                for index, item in enumerate(raw_balances[:10]):
+                    balance = _definition_balance(item, f"mapping.balances[{index}]", errors)
+                    if balance:
+                        balances.append(balance)
+        details: list[dict[str, Any]] = []
+        raw_details = mapping_raw.get("details")
+        if raw_details is not None:
+            if not isinstance(raw_details, list):
+                _definition_error(errors, "mapping.details", "must be a list")
+            else:
+                if len(raw_details) > 20:
+                    _definition_error(errors, "mapping.details", "at most 20 details are supported")
+                for index, item in enumerate(raw_details[:20]):
+                    detail = _definition_detail(item, f"mapping.details[{index}]", errors)
+                    if detail:
+                        details.append(detail)
+        if not windows and not windows_from and not balances:
+            _definition_error(errors, "mapping", "must map at least one window or balance")
+        if windows and windows_from:
+            _definition_error(errors, "mapping", "windows and windows_from cannot both be present")
+        mapping = {
+            "title": title,
+            "plan": plan,
+            "scope_note": mapping_scope,
+            "windows": windows,
+            "windows_from": windows_from,
+            "balances": balances,
+            "details": details,
+        }
+
+    if errors:
+        return None, errors, warnings
+
+    definition = {
+        "schema": _DEFINITION_SCHEMA,
+        "id": ident,
+        "name": name,
+        "description": description,
+        "version": version,
+        "docs_url": docs_url["url"] if docs_url else None,
+        "request": request,
+        "cache_ttl_seconds": ttl,
+        "mapping": mapping,
+        "scope_note": scope_note,
+        "stability": stability,
+        "author": author,
+        "license": license_name,
+        "override": override,
+    }
+    definition["_source"] = source
+    definition["_digest"] = _definition_digest(definition)
+    return definition, errors, warnings
+
+
+def _definition_digest(definition: dict[str, Any]) -> str:
+    payload = {key: value for key, value in definition.items() if not key.startswith("_")}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _definition_file_entry(path: Path, *, source: str, allow_override: bool) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "id": path.stem,
+        "name": path.stem.replace("-", " ").title(),
+        "file": path.name,
+        "source": source,
+        "errors": [],
+        "warnings": [],
+        "definition": None,
+    }
+    try:
+        size = path.stat().st_size
+        if size > _DEFINITION_MAX_FILE_BYTES:
+            entry["errors"] = [f"file: is {size} bytes; the limit is {_DEFINITION_MAX_FILE_BYTES} bytes"]
+            return entry
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        entry["errors"] = [f"file: could not read JSON ({type(exc).__name__})"]
+        return entry
+    if isinstance(raw, dict):
+        entry["id"] = str(raw.get("id") or path.stem).strip() or path.stem
+        entry["name"] = str(raw.get("name") or entry["id"]).strip() or entry["id"]
+    definition, errors, warnings = _validate_definition(raw, source=source, allow_override=allow_override)
+    entry["errors"] = errors
+    entry["warnings"] = warnings
+    if definition:
+        definition["_file"] = path.name
+        entry["definition"] = definition
+    return entry
+
+
+def _definition_files(directory: Path, *, source: str, allow_override: bool) -> list[dict[str, Any]]:
+    if not directory.exists() or not directory.is_dir():
+        return []
+    entries = []
+    for path in sorted(directory.glob("*.json"), key=lambda item: item.name.lower()):
+        if path.is_file():
+            entries.append(_definition_file_entry(path, source=source, allow_override=allow_override))
+    return entries
+
+
+def _load_provider_definitions() -> dict[str, Any]:
+    bundled_dir = _definition_bundled_dir()
+    profile_dir = _definition_profile_dir()
+    bundled = _definition_files(bundled_dir, source="bundled", allow_override=False)
+    profile = _definition_files(profile_dir, source="profile", allow_override=True)
+
+    valid: dict[str, dict[str, Any]] = {}
+    invalid: list[dict[str, Any]] = []
+    bundled_ids: set[str] = set()
+
+    for entry in bundled:
+        if not entry["definition"]:
+            invalid.append(entry)
+            continue
+        ident = entry["definition"]["id"]
+        if ident in valid:
+            entry["errors"] = [f"id: duplicate bundled definition '{ident}'"]
+            invalid.append(entry)
+            continue
+        bundled_ids.add(ident)
+        valid[ident] = entry
+
+    profile_seen: set[str] = set()
+    for entry in profile:
+        if not entry["definition"]:
+            invalid.append(entry)
+            continue
+        definition = entry["definition"]
+        ident = definition["id"]
+        if ident in profile_seen:
+            entry["errors"] = [f"id: duplicate profile definition '{ident}' (first file wins)"]
+            invalid.append(entry)
+            continue
+        profile_seen.add(ident)
+        if ident in bundled_ids:
+            if not definition.get("override"):
+                entry["errors"] = [
+                    f"id: collides with bundled definition '{ident}'; rename it or set \"override\": true to replace the bundled entry"
+                ]
+                invalid.append(entry)
+                continue
+            definition["_overrides"] = "bundled"
+            entry["overrides"] = "bundled"
+            valid[ident] = entry
+            continue
+        if ident in valid:
+            entry["errors"] = [f"id: duplicate definition '{ident}'"]
+            invalid.append(entry)
+            continue
+        valid[ident] = entry
+
+    return {
+        "valid": valid,
+        "invalid": invalid,
+        "bundled_dir": bundled_dir,
+        "profile_dir": profile_dir,
+        "bundled_count": len(bundled),
+        "profile_count": len(profile),
+    }
+
+
+def _credential_value(ref: dict[str, Any]) -> Optional[str]:
+    try:
+        if ref.get("source") == "env":
+            value = os.environ.get(str(ref.get("name") or ""))
+            return value.strip() if isinstance(value, str) and value.strip() else None
+        if ref.get("source") == "hermes_provider":
+            provider = str(ref.get("provider") or "").strip()
+            field = str(ref.get("field") or "api_key")
+            if not provider:
+                return None
+            from hermes_cli.auth import get_provider_auth_state
+
+            state = get_provider_auth_state(provider) or {}
+            value = state.get(field)
+            if not isinstance(value, str) or not value.strip():
+                tokens = state.get("tokens")
+                if isinstance(tokens, dict):
+                    value = tokens.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if field == "api_key":
+                from hermes_cli.runtime_provider import resolve_runtime_provider
+
+                runtime = resolve_runtime_provider(requested=provider) or {}
+                value = runtime.get("api_key")
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _credential_label(ref: dict[str, Any]) -> str:
+    if ref.get("source") == "env":
+        return str(ref.get("name") or "environment variable")
+    return f"{ref.get('provider')}.{ref.get('field')}"
+
+
+def _resolve_definition_headers(definition: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    headers: dict[str, str] = {}
+    missing: list[str] = []
+    for spec in definition["request"].get("headers") or []:
+        ref = spec.get("credential") or {}
+        value = _credential_value(ref)
+        if not value:
+            missing.append(_credential_label(ref))
+            continue
+        headers[str(spec["name"])] = f"{spec.get('prefix') or ''}{value}"
+    return headers, missing
+
+
+def _definition_endpoint_host(definition: dict[str, Any]) -> str:
+    return str(definition["request"].get("host") or "")
+
+
+def _assert_public_host(host: str) -> None:
+    try:
+        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise _DefinitionError("unavailable", f"Could not resolve {host}; check the definition's host and this machine's DNS.") from exc
+    if not infos:
+        raise _DefinitionError("unavailable", f"Could not resolve {host}.")
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise _DefinitionError("blocked", f"{host} resolved to an invalid address; the request was refused.") from exc
+        if not parsed.is_global:
+            raise _DefinitionError("blocked", f"{host} resolves to a non-public address ({address}); local/private requests are refused.")
+
+
+def _definition_request_json(
+    definition: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    transport: Any = None,
+) -> Any:
+    host = _definition_endpoint_host(definition)
+    _assert_public_host(host)
+    if transport is None:
+        transport = _DEFINITION_TRANSPORT
+    kwargs: dict[str, Any] = {
+        "follow_redirects": False,
+        "trust_env": False,  # no proxy/netrc surprises; the SSRF check must describe the real peer
+        "timeout": httpx.Timeout(_DEFINITION_TIMEOUT_SECS, connect=5.0),
+        "headers": {
+            "accept": "application/json",
+            "user-agent": f"hermes-provider-usage/{_PLUGIN_VERSION}",
+        },
+    }
+    if transport is not None:
+        kwargs["transport"] = transport
+    try:
+        with httpx.Client(**kwargs) as client:
+            with client.stream("GET", definition["request"]["url"], headers=headers) as response:
+                status = response.status_code
+                if 300 <= status < 400:
+                    raise _DefinitionError("unavailable", "Provider redirected the request; redirects are not followed (credentials are never forwarded).")
+                if status in (401, 403):
+                    raise _DefinitionError("needs_permission", f"Provider refused access (HTTP {status}); check the credential reference, its scope, and its permissions.")
+                if status == 429:
+                    raise _DefinitionError("unavailable", "Provider rate-limited this account (HTTP 429); try again later.")
+                if status >= 400:
+                    raise _DefinitionError("unavailable", f"Provider returned HTTP {status}.")
+                content_length = response.headers.get("content-length")
+                if content_length and content_length.isdigit() and int(content_length) > _DEFINITION_MAX_BYTES:
+                    raise _DefinitionError("unavailable", f"Provider response is larger than the {_DEFINITION_MAX_BYTES // 1024} KiB limit.")
+                content_type = str(response.headers.get("content-type") or "").lower()
+                if content_type and "json" not in content_type:
+                    raise _DefinitionError("unavailable", "Provider did not return JSON (content-type check).")
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _DEFINITION_MAX_BYTES:
+                        raise _DefinitionError("unavailable", f"Provider response exceeded the {_DEFINITION_MAX_BYTES // 1024} KiB limit.")
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+    except _DefinitionError:
+        raise
+    except httpx.TimeoutException as exc:
+        raise _DefinitionError("unavailable", f"Provider request timed out after {_DEFINITION_TIMEOUT_SECS:.0f}s.") from exc
+    except httpx.RequestError as exc:
+        raise _DefinitionError("unavailable", "Provider request failed before a response was received.") from exc
+    if not body:
+        raise _DefinitionError("unavailable", "Provider returned an empty response.")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _DefinitionError("unavailable", "Provider returned invalid JSON.") from exc
+    if not isinstance(payload, (dict, list)):
+        raise _DefinitionError("unavailable", "Provider JSON must be an object or an array.")
+    return payload
+
+
+def _path_get(payload: Any, path: str) -> Any:
+    current = payload
+    for part in path.split("."):
+        if isinstance(current, dict):
+            if part not in current:
+                return None
+            current = current[part]
+        elif isinstance(current, list):
+            if not part.isdigit():
+                return None
+            index = int(part)
+            if index >= len(current):
+                return None
+            current = current[index]
+        else:
+            return None
+    return current
+
+
+def _definition_scalar(spec: Any, payload: Any, *, numeric: bool = False, reset: bool = False) -> Any:
+    if spec is None:
+        return None
+    if isinstance(spec, str):
+        return spec.strip() or None
+    if not isinstance(spec, dict):
+        return None
+    if "value" in spec:
+        value = spec.get("value")
+        if numeric or reset:
+            return None
+        text = str(value or "").strip()
+        return text or None
+    value = _path_get(payload, str(spec.get("path") or ""))
+    if value is None:
+        return None
+    if numeric:
+        return _number(value)
+    if reset:
+        fmt = spec.get("format") or "iso"
+        if fmt in {"unix", "unix_ms"}:
+            number = _number(value)
+            if number is None:
+                return None
+            return _datetime(number / 1000.0 if fmt == "unix_ms" else number)
+        return _datetime(value)
+    if isinstance(value, (dict, list)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    prefix = str(spec.get("prefix") or "")
+    suffix = str(spec.get("suffix") or "")
+    text = f"{prefix}{text}{suffix}"
+    return text[:500]
+
+
+def _format_quantity(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    if abs(value - round(value)) < 1e-9:
+        return f"{int(round(value)):,}"
+    if abs(value) >= 100:
+        return f"{value:,.0f}"
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def _definition_window_detail(window: dict[str, Any]) -> Optional[str]:
+    unit = str(window.get("unit") or "")
+    used = window.get("used")
+    limit = window.get("limit")
+    remaining = window.get("remaining")
+    currency = str(window.get("currency") or "")
+    if unit == "usd":
+        return None  # UsageMeter renders the dollar summary in the headline.
+    unit_label = unit if unit and unit != "custom" else "units"
+    if limit is not None and limit <= 0:
+        return "No allowance reported"
+    if used is not None and limit is not None:
+        return f"{_format_quantity(used)} of {_format_quantity(limit)} {unit_label}"
+    if used is not None:
+        return f"{_format_quantity(used)} {unit_label} used"
+    if remaining is not None:
+        return f"{_format_quantity(remaining)} {unit_label} left"
+    return None
+
+
+def _normalize_definition_window(spec: dict[str, Any], item: Any, index: int) -> Optional[dict[str, Any]]:
+    label = _definition_scalar(spec.get("label"), item)
+    if not label:
+        return None
+    used = _definition_scalar((spec.get("numeric") or {}).get("used"), item, numeric=True)
+    limit = _definition_scalar((spec.get("numeric") or {}).get("limit"), item, numeric=True)
+    remaining = _definition_scalar((spec.get("numeric") or {}).get("remaining"), item, numeric=True)
+    used_percent = _definition_scalar((spec.get("numeric") or {}).get("used_percent"), item, numeric=True)
+    remaining_percent = _definition_scalar((spec.get("numeric") or {}).get("remaining_percent"), item, numeric=True)
+    if all(value is None for value in (used, limit, remaining, used_percent, remaining_percent)):
+        return None
+    if used_percent is None:
+        if limit is not None and limit > 0:
+            if used is not None:
+                used_percent = (used / limit) * 100.0
+            elif remaining is not None:
+                used_percent = (1.0 - (remaining / limit)) * 100.0
+    if used_percent is None and remaining_percent is not None:
+        used_percent = 100.0 - remaining_percent
+    if remaining_percent is None and used_percent is not None:
+        remaining_percent = 100.0 - used_percent
+    if used_percent is not None:
+        used_percent = max(0.0, min(100.0, used_percent))
+    if remaining_percent is not None:
+        remaining_percent = max(0.0, min(100.0, remaining_percent))
+    reset_at = _definition_scalar(spec.get("reset_at"), item, reset=True)
+    detail = _definition_scalar(spec.get("detail"), item)
+    window: dict[str, Any] = {
+        "label": label,
+        "kind": spec.get("kind") or "custom",
+        "rolling": bool(spec.get("rolling", True)),
+        "unit": spec.get("unit") or "percent",
+        "used_percent": round(used_percent, 2) if used_percent is not None else None,
+        "remaining_percent": round(remaining_percent, 2) if remaining_percent is not None else None,
+        "reset_at": reset_at,
+        "detail": detail or _definition_window_detail({
+            "unit": spec.get("unit") or "percent",
+            "used": used,
+            "limit": limit,
+            "remaining": remaining,
+            "currency": (spec.get("currency") or {}).get("value") if isinstance(spec.get("currency"), dict) else spec.get("currency"),
+        }),
+    }
+    if spec.get("period_seconds"):
+        window["period_seconds"] = spec["period_seconds"]
+    currency = spec.get("currency")
+    if isinstance(currency, dict):
+        currency = _definition_scalar(currency, item)
+    if currency:
+        window["currency"] = str(currency).upper()
+    if used is not None:
+        window["used"] = used
+    if limit is not None:
+        window["limit"] = limit
+    if remaining is not None:
+        window["remaining"] = remaining
+    if (spec.get("unit") or "") == "usd":
+        if limit is not None:
+            window["allowance_usd"] = limit
+        if remaining is not None:
+            window["remaining_usd"] = remaining
+        if used is not None:
+            window["spent_usd"] = used
+    return window
+
+
+def _definition_mapping_windows(mapping: dict[str, Any], payload: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    windows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, spec in enumerate(mapping.get("windows") or []):
+        window = _normalize_definition_window(spec, payload, index)
+        if window:
+            windows.append(window)
+    source = mapping.get("windows_from")
+    if source:
+        items = _path_get(payload, source["path"])
+        if isinstance(items, list):
+            for index, item in enumerate(items[:50]):
+                window = _normalize_definition_window(source["spec"], item, index)
+                if window:
+                    windows.append(window)
+            if len(items) > 50:
+                warnings.append("Only the first 50 windows are shown.")
+        elif items is not None:
+            warnings.append(f"Mapping path '{source['path']}' is not an array, so no windows were read.")
+    return windows, warnings
+
+
+def _definition_balances(mapping: dict[str, Any], payload: Any) -> list[dict[str, Any]]:
+    balances: list[dict[str, Any]] = []
+    for spec in mapping.get("balances") or []:
+        amount = _definition_scalar(spec.get("amount"), payload, numeric=True)
+        if amount is None:
+            continue
+        currency = spec.get("currency")
+        if isinstance(currency, dict):
+            currency = _definition_scalar(currency, payload)
+        balances.append({
+            "label": spec["label"],
+            "amount": amount,
+            "currency": str(currency or "USD").upper(),
+            "unit": spec.get("unit") or "currency",
+            "kind": spec.get("kind") or "credit",
+            "detail": _definition_scalar(spec.get("detail"), payload),
+        })
+    return balances
+
+
+def _definition_details(mapping: dict[str, Any], payload: Any) -> list[str]:
+    details: list[str] = []
+    for spec in mapping.get("details") or []:
+        value = _definition_scalar(spec, payload)
+        if value:
+            details.append(str(value)[:500])
+    return details
+
+
+def _definition_age_seconds(fetched_at: Optional[str]) -> Optional[int]:
+    parsed = _datetime(fetched_at)
+    if not parsed:
+        return None
+    try:
+        moment = datetime.fromisoformat(parsed.replace("Z", "+00:00"))
+        return max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    except ValueError:
+        return None
+
+
+def _definition_provenance(
+    definition: dict[str, Any],
+    *,
+    fetched_at: Optional[str],
+    cache: str,
+    ttl: int,
+    profile: Optional[str],
+) -> dict[str, Any]:
+    return {
+        "kind": "declarative",
+        "definition_id": definition["id"],
+        "definition_version": definition["version"],
+        "definition_source": definition.get("_source") or "profile",
+        "definition_file": definition.get("_file") or "",
+        "docs_url": definition.get("docs_url"),
+        "endpoint_host": _definition_endpoint_host(definition),
+        "fetched_at": fetched_at,
+        "checked_at": _now(),
+        "cache": cache,
+        "ttl_seconds": ttl,
+        "scope": profile or "active",
+        "overrides": definition.get("_overrides"),
+    }
+
+
+def _normalize_definition_row(
+    definition: dict[str, Any],
+    payload: Any,
+    *,
+    fetched_at: str,
+    cache: str,
+    profile: Optional[str],
+    warnings: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    mapping = definition["mapping"]
+    title = mapping.get("title") or definition["name"]
+    plan = _definition_scalar(mapping.get("plan"), payload)
+    row = _base(definition["id"], title=title, source="declarative", plan=plan)
+    row["label"] = definition["name"]
+    row["definition"] = True
+    row["definition_id"] = definition["id"]
+    row["definition_version"] = definition["version"]
+    row["definition_source"] = definition.get("_source") or "profile"
+    row["scope"] = profile or "active"
+    row["state"] = "ok"
+    row["provenance"] = _definition_provenance(
+        definition, fetched_at=fetched_at, cache=cache, ttl=definition["cache_ttl_seconds"], profile=profile
+    )
+    windows, mapping_warnings = _definition_mapping_windows(mapping, payload)
+    balances = _definition_balances(mapping, payload)
+    details = _definition_details(mapping, payload)
+    if definition.get("scope_note"):
+        details.append(str(definition["scope_note"]))
+    details.extend(mapping_warnings)
+    details.extend(warnings or [])
+    if windows:
+        row["limits"] = [{"id": "default", "label": title, "windows": windows}]
+        row["capability"] = "usage"
+    if balances:
+        row["balances"] = balances
+        if not windows:
+            row["capability"] = "balance"
+    row["details"] = details
+    row["available"] = bool(windows or balances)
+    if not row["available"]:
+        row["state"] = "unverified"
+        row["unavailable_reason"] = (
+            "The endpoint returned JSON, but the definition's mapping produced no windows or balances. "
+            "Check its JSON paths and units."
+        )
+    row["freshness"] = {
+        "fetched_at": fetched_at,
+        "age_seconds": _definition_age_seconds(fetched_at),
+        "stale": False,
+        "ttl_seconds": definition["cache_ttl_seconds"],
+    }
+    return row
+
+
+def _unavailable_definition_row(
+    definition: dict[str, Any],
+    *,
+    state: str,
+    reason: str,
+    profile: Optional[str],
+) -> dict[str, Any]:
+    row = _base(definition["id"], title=definition["name"], source="declarative", plan=None)
+    row["label"] = definition["name"]
+    row["definition"] = True
+    row["definition_id"] = definition["id"]
+    row["definition_version"] = definition["version"]
+    row["definition_source"] = definition.get("_source") or "profile"
+    row["scope"] = profile or "active"
+    row["state"] = state
+    row["available"] = False
+    row["capability"] = "usage" if definition["mapping"].get("windows") or definition["mapping"].get("windows_from") else "balance"
+    row["unavailable_reason"] = reason
+    row["provenance"] = _definition_provenance(
+        definition, fetched_at=None, cache="none", ttl=definition["cache_ttl_seconds"], profile=profile
+    )
+    row["provenance"]["error"] = reason
+    row["freshness"] = {
+        "fetched_at": None,
+        "age_seconds": None,
+        "stale": False,
+        "ttl_seconds": definition["cache_ttl_seconds"],
+    }
+    return row
+
+
+def _definition_cache_key(definition: dict[str, Any], profile: Optional[str], headers: dict[str, str]) -> str:
+    credential_shape = hashlib.sha256(
+        json.dumps(headers, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"{str(profile or 'active').strip() or 'active'}|{definition['id']}|{definition.get('_digest') or ''}|{credential_shape}"
+
+
+def _fetch_declarative(
+    definition: dict[str, Any],
+    *,
+    profile: Optional[str],
+    headers: dict[str, str],
+    transport: Any = None,
+) -> dict[str, Any]:
+    payload = _definition_request_json(definition, headers, transport=transport)
+    return _normalize_definition_row(
+        definition,
+        payload,
+        fetched_at=_now(),
+        cache="miss",
+        profile=profile,
+    )
+
+
+def _fetch_declarative_cached(
+    definition: dict[str, Any],
+    *,
+    profile: Optional[str],
+    headers: Optional[dict[str, str]] = None,
+    transport: Any = None,
+) -> dict[str, Any]:
+    if headers is None:
+        headers, missing = _resolve_definition_headers(definition)
+        if missing:
+            return _unavailable_definition_row(
+                definition,
+                state="not_connected",
+                reason=(
+                    "Not connected: provide "
+                    + ", ".join(missing)
+                    + " in the Hermes environment, then refresh. Credentials never appear in this pane."
+                ),
+                profile=profile,
+            )
+    key = _definition_cache_key(definition, profile, headers)
+    ttl = int(definition.get("cache_ttl_seconds") or 300)
+    now_mono = time.monotonic()
+    with _DEFINITION_CACHE_LOCK:
+        entry = _DEFINITION_CACHE.get(key)
+    if entry and now_mono - float(entry.get("at") or 0) < ttl:
+        row = copy.deepcopy(entry["row"])
+        row["provenance"]["cache"] = "hit"
+        row["provenance"]["checked_at"] = _now()
+        fetched_at = row.get("fetched_at") or row.get("freshness", {}).get("fetched_at")
+        row["freshness"] = {
+            "fetched_at": fetched_at,
+            "age_seconds": _definition_age_seconds(fetched_at),
+            "stale": False,
+            "ttl_seconds": ttl,
+        }
+        return row
+    try:
+        row = _fetch_declarative(definition, profile=profile, headers=headers, transport=transport)
+    except _DefinitionError as exc:
+        if entry:
+            row = copy.deepcopy(entry["row"])
+            row["state"] = "stale"
+            row["provenance"]["cache"] = "stale"
+            row["provenance"]["checked_at"] = _now()
+            row["provenance"]["error"] = exc.message
+            fetched_at = row.get("fetched_at") or row.get("freshness", {}).get("fetched_at")
+            row["freshness"] = {
+                "fetched_at": fetched_at,
+                "age_seconds": _definition_age_seconds(fetched_at),
+                "stale": True,
+                "ttl_seconds": ttl,
+            }
+            return row
+        return _unavailable_definition_row(definition, state=exc.state, reason=exc.message, profile=profile)
+    with _DEFINITION_CACHE_LOCK:
+        _DEFINITION_CACHE[key] = {"at": now_mono, "row": copy.deepcopy(row)}
+        if len(_DEFINITION_CACHE) > 128:
+            oldest = sorted(_DEFINITION_CACHE.items(), key=lambda item: float(item[1].get("at") or 0))[: len(_DEFINITION_CACHE) - 128]
+            for stale_key, _ in oldest:
+                _DEFINITION_CACHE.pop(stale_key, None)
+    return row
+
+
+def _definition_ready(definition: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    headers, missing = _resolve_definition_headers(definition)
+    return headers, missing
+
+
+def _definition_catalog_entry(
+    entry: dict[str, Any],
+    *,
+    row: Optional[dict[str, Any]],
+    missing: list[str],
+    profile: Optional[str],
+) -> dict[str, Any]:
+    definition = entry.get("definition")
+    if not definition:
+        return {
+            "id": entry.get("id") or "unknown",
+            "name": entry.get("name") or entry.get("id") or "Invalid definition",
+            "source": entry.get("source") or "profile",
+            "file": entry.get("file") or "",
+            "state": "invalid",
+            "errors": list(entry.get("errors") or [])[:8],
+            "warnings": list(entry.get("warnings") or [])[:8],
+        }
+    state = "available" if missing else "ready"
+    if row:
+        state = str(row.get("state") or "connected")
+        if state == "ok":
+            state = "connected"
+    return {
+        "id": definition["id"],
+        "name": definition["name"],
+        "description": definition.get("description"),
+        "version": definition["version"],
+        "source": definition.get("_source") or "profile",
+        "file": definition.get("_file") or "",
+        "host": _definition_endpoint_host(definition),
+        "docs_url": definition.get("docs_url"),
+        "stability": definition.get("stability") or "experimental",
+        "scope_note": definition.get("scope_note") or definition["mapping"].get("scope_note"),
+        "state": state,
+        "missing_credentials": missing,
+        "setup": {
+            "file": f"{definition['id']}.json",
+            "env": missing,
+            "directory": "$HERMES_HOME/provider-usage/providers",
+            "validate": "POST /api/plugins/provider-usage/definitions/validate",
+        },
+        "overrides": entry.get("overrides"),
+        "errors": list(entry.get("errors") or [])[:8],
+        "warnings": list(entry.get("warnings") or [])[:8],
+        "last_error": (row or {}).get("unavailable_reason"),
+        "scope": profile or "default",
+    }
+
+
+def _definition_catalog(
+    loaded: dict[str, Any],
+    *,
+    rows: dict[str, dict[str, Any]],
+    prepared: dict[str, dict[str, Any]],
+    profile: Optional[str],
+) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for ident, entry in loaded["valid"].items():
+        prepared_item = prepared.get(ident) or {}
+        entries.append(
+            _definition_catalog_entry(
+                entry,
+                row=rows.get(ident),
+                missing=list(prepared_item.get("missing") or []),
+                profile=profile,
+            )
+        )
+    for entry in loaded["invalid"]:
+        entries.append(_definition_catalog_entry(entry, row=None, missing=[], profile=profile))
+    order = {"connected": 0, "available": 1, "unverified": 2, "stale": 2, "needs_permission": 3, "unavailable": 4, "invalid": 5}
+    entries.sort(key=lambda item: (order.get(str(item.get("state")), 9), str(item.get("name") or "").lower()))
+    counts: dict[str, int] = {}
+    for item in entries:
+        state = str(item.get("state") or "available")
+        counts[state] = counts.get(state, 0) + 1
+    return {
+        "version": 1,
+        "profile": profile or "default",
+        "directory": "$HERMES_HOME/provider-usage/providers",
+        "definitions": entries,
+        "counts": counts,
+        "bundled_count": loaded.get("bundled_count", 0),
+        "profile_count": loaded.get("profile_count", 0),
+    }
+
+
+def _definition_inventory(
+    loaded: dict[str, Any],
+    *,
+    prepared: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for ident in prepared:
+        definition = loaded["valid"][ident]["definition"]
+        rows.append({
+            "id": ident,
+            "label": definition["name"],
+            "configured": True,
+            "supported": True,
+            "definition": True,
+            "capability": "usage" if definition["mapping"].get("windows") or definition["mapping"].get("windows_from") else "balance",
+        })
+    return rows
+
+
+def _prepare_definitions(loaded: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    prepared: dict[str, dict[str, Any]] = {}
+    for ident, entry in loaded["valid"].items():
+        definition = entry["definition"]
+        headers, missing = _resolve_definition_headers(definition)
+        if missing:
+            prepared[ident] = {"definition": definition, "headers": {}, "missing": missing}
+        else:
+            prepared[ident] = {"definition": definition, "headers": headers, "missing": []}
+    return prepared
+
+
+@router.get("/definitions/catalog")
+def definitions_catalog(profile: Optional[str] = None) -> dict[str, Any]:
+    cleaned = _clean_profile(profile)
+    from hermes_cli.web_server_profiles import _config_profile_scope
+
+    with _config_profile_scope(cleaned):
+        loaded = _load_provider_definitions()
+        prepared = _prepare_definitions(loaded)
+        return _definition_catalog(loaded, rows={}, prepared=prepared, profile=cleaned)
+
+
+@router.post("/definitions/validate")
+def definitions_validate(payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    body = payload if isinstance(payload, dict) else {}
+    raw = body.get("definition")
+    if raw is None and isinstance(body.get("json"), str):
+        try:
+            raw = json.loads(body["json"])
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "errors": [f"json: {exc.msg} at line {exc.lineno}"], "warnings": [], "summary": None}
+    definition, errors, warnings = _validate_definition(raw, source="profile", allow_override=True)
+    summary = None
+    if definition:
+        summary = {
+            "id": definition["id"],
+            "name": definition["name"],
+            "version": definition["version"],
+            "host": _definition_endpoint_host(definition),
+            "cache_ttl_seconds": definition["cache_ttl_seconds"],
+            "windows": len(definition["mapping"]["windows"]) + (1 if definition["mapping"]["windows_from"] else 0),
+            "balances": len(definition["mapping"]["balances"]),
+            "details": len(definition["mapping"]["details"]),
+            "credential_refs": [
+                _credential_label(spec["credential"])
+                for spec in definition["request"]["headers"]
+            ],
+        }
+    return {"ok": bool(definition), "errors": errors, "warnings": warnings, "summary": summary}
+
+
+def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if definition is not None:
+        return _fetch_declarative_cached(definition, profile=None)
     if provider == "openai-codex":
         return _fetch_codex()
     if provider == "openrouter":
@@ -1894,7 +3380,7 @@ def _cache_stats(days: int = 7) -> dict[str, dict[str, Any]]:
 
 @router.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "plugin": "provider-usage", "version": "0.9.0"}
+    return {"ok": True, "plugin": "provider-usage", "version": _PLUGIN_VERSION}
 
 
 def _clean_profile(value: Any) -> Optional[str]:
@@ -1917,6 +3403,21 @@ def overview(payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str
         return _overview_scoped(body, profile)
 
 
+def _fetch_inventory_provider(
+    provider: str,
+    prepared: dict[str, dict[str, Any]],
+    profile: Optional[str],
+) -> dict[str, Any]:
+    item = prepared.get(provider)
+    if item:
+        return _fetch_declarative_cached(
+            item["definition"],
+            profile=profile,
+            headers=item.get("headers") or {},
+        )
+    return _fetch_provider(provider)
+
+
 def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, Any]:
     from contextvars import copy_context
 
@@ -1924,16 +3425,25 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
         _refresh_vendor_specs()
     else:
         _maybe_refresh_vendor_specs()
+    loaded = _load_provider_definitions()
+    prepared = _prepare_definitions(loaded)
+    ready = {ident: item for ident, item in prepared.items() if not item.get("missing")}
     requested_provider = _canonical(body.get("active_provider")) if body.get("active_provider") else ""
     active_model = str(body.get("active_model") or "").strip()
     inventory = _inventory()
+    known = {item["id"] for item in inventory}
+    for item in _definition_inventory(loaded, prepared=ready):
+        if item["id"] not in known:
+            inventory.append(item)
+            known.add(item["id"])
     rows: dict[str, dict[str, Any]] = {}
 
-    supported = [item["id"] for item in inventory if item.get("supported")]
+    supported = [item["id"] for item in inventory if item.get("supported") and not item.get("definition")]
+    supported.extend(item["id"] for item in inventory if item.get("definition") and item["id"] in ready)
     if supported:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(supported))) as executor:
             futures = {
-                executor.submit(copy_context().run, _fetch_provider, provider): provider
+                executor.submit(copy_context().run, _fetch_inventory_provider, provider, ready, profile): provider
                 for provider in supported
             }
             for future in concurrent.futures.as_completed(futures):
@@ -1941,7 +3451,16 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
                 try:
                     row = future.result()
                 except Exception as exc:
-                    row = _unavailable(provider, _safe_request_error(exc))
+                    definition = (ready.get(provider) or {}).get("definition")
+                    if definition is not None:
+                        row = _unavailable_definition_row(
+                            definition,
+                            state="unavailable",
+                            reason=_safe_request_error(exc),
+                            profile=profile,
+                        )
+                    else:
+                        row = _unavailable(provider, _safe_request_error(exc))
                     log.debug("provider-usage %s failed", provider, exc_info=True)
                 rows[provider] = row
 
@@ -1949,7 +3468,16 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
     providers = []
     for item in inventory:
         provider = item["id"]
-        row = rows.get(provider) or _unavailable(provider, "No usage or balance endpoint is known for this provider.")
+        definition = (ready.get(provider) or {}).get("definition")
+        if definition is not None:
+            row = rows.get(provider) or _unavailable_definition_row(
+                definition,
+                state="unavailable",
+                reason="The definition was ready but no response was recorded.",
+                profile=profile,
+            )
+        else:
+            row = rows.get(provider) or _unavailable(provider, "No usage or balance endpoint is known for this provider.")
         row["id"] = provider
         row["label"] = item["label"]
         row["configured"] = bool(item.get("configured"))
@@ -1964,16 +3492,18 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
 
     default_provider = ""
     try:
-        model_config = __import__("hermes_cli.config", fromlist=["load_config"]).load_config() or {}
+        model_config = config = __import__("hermes_cli.config", fromlist=["load_config"]).load_config() or {}
         default_provider = _canonical((model_config.get("model") or {}).get("provider"))
     except Exception:
         pass
     active_provider = requested_provider or default_provider or (providers[0]["id"] if providers else "")
     return {
         "version": 1,
+        "definitions_version": 1,
         "fetched_at": _now(),
         "account_profile": profile or "default",
         "active": {"provider": active_provider, "model": active_model},
         "default_provider": default_provider,
         "providers": providers,
+        "catalog": _definition_catalog(loaded, rows=rows, prepared=prepared, profile=profile),
     }

@@ -1,0 +1,50 @@
+{
+  "schema": "hermes.provider-usage.definition/1",
+  "id": "example-usage",
+  "name": "Example usage API",
+  "description": "Replace this with one sentence about the account-level allowance or balance this endpoint reports.",
+  "version": 1,
+  "docs_url": "https://example.com/docs/usage",
+  "scope_note": "Account-wide allowance for the example service.",
+  "stability": "experimental",
+  "request": {
+    "url": "https://api.example.com/v1/usage",
+    "method": "GET",
+    "hosts": ["api.example.com"],
+    "headers": [
+      {
+        "name": "Authorization",
+        "prefix": "Bearer ",
+        "credential": {"source": "env", "name": "EXAMPLE_API_KEY"}
+      }
+    ]
+  },
+  "cache_ttl_seconds": 300,
+  "mapping": {
+    "title": "Example API",
+    "plan": {"path": "plan.name"},
+    "windows": [
+      {
+        "label": "Monthly requests",
+        "kind": "monthly",
+        "rolling": false,
+        "unit": "requests",
+        "used": {"path": "usage.used"},
+        "limit": {"path": "usage.limit"},
+        "reset_at": {"path": "usage.resets_at", "format": "iso"}
+      }
+    ],
+    "balances": [
+      {
+        "label": "Credit balance",
+        "amount": {"path": "credits.remaining"},
+        "currency": "USD",
+        "unit": "currency",
+        "kind": "credit"
+      }
+    ],
+    "details": [
+      {"path": "account.name", "prefix": "Account: "}
+    ]
+  }
+}

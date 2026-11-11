@@ -155,13 +155,13 @@ export const host = {
     get focusedSessionOwner() { return hostStateCtx.ownerAtom }
   },
   async request(method, params) {
-    if (method === 'session.status') {
+    if (method === 'session.status' || method === 'session.info') {
       const id = params?.session_id
       const plan = sessionStatusPlan(id)
       const provider = plan?.provider ?? activeProvider()
       const delayMs = plan?.delayMs ?? 0
       return new Promise(resolve => {
-        setTimeout(() => resolve({ info: { provider }, provider }), delayMs)
+        setTimeout(() => resolve({ info: { provider, session_id: id }, provider, session_id: id }), delayMs)
       })
     }
     return {}
@@ -170,7 +170,10 @@ export const host = {
     if (type === 'session.info') {
       eventHandlers.sessionInfo.add(handler)
       // Deterministic initial delivery of the fixture's active provider.
-      setTimeout(() => handler({ payload: { provider: activeProvider() } }), 0)
+      setTimeout(() => handler({
+        session_id: hostState().focusedSessionId || undefined,
+        payload: { provider: activeProvider(), session_id: hostState().focusedSessionId || undefined }
+      }), 0)
       // Scheduled late/foreign events (A-B-A, source-attributed, anonymous).
       const scheduled = Array.isArray(fixture().events) ? fixture().events : []
       for (const ev of scheduled) {

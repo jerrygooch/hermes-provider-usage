@@ -14,6 +14,7 @@ Provider Usage answers one practical question: **what shared account resource go
 | SuperGrok / xAI OAuth | Subscription quota and reset data | Experimental | Uses an undocumented Grok billing endpoint that may change. The response does not expose a trustworthy plan tier, so the plugin labels the product **SuperGrok** and does not infer a higher tier. |
 | Ollama Cloud | Session, weekly, and monthly usage windows plus per-model request counts | Experimental | Uses an account usage endpoint that is community-known rather than officially documented, so responses may change. Plans differ: newer plans report monthly credit usage; older ones report 5-hour and weekly windows. Reset times appear only when the account reports them; otherwise they stay marked unavailable. |
 | Nous Portal | Portal credit snapshot | Experimental | Availability depends on the installed Hermes version and the account capabilities exposed by its runtime. |
+| Declarative JSON definitions | Any fixed read-only HTTPS usage or balance endpoint described by the bundled v1 schema | Tested | Data-only schema; no scripts or literal secrets. Public DNS only, no redirects, bounded response, strict validation. GitHub rate limits ship without a credential; Moonshot and ElevenLabs are available-to-connect. |
 | Anthropic, Google, Azure, and local providers | Honest capability state | Planned | A provider is added only when there is a useful authenticated account-level source. Until then, the plugin reports the limitation instead of guessing. |
 
 ## OpenCode products
@@ -36,6 +37,20 @@ If Zen fallback is enabled in the OpenCode account, Zen credits may fund a reque
 6. Missing values remain missing. The plugin does not invent renewal dates, prices, token counts, demand periods, history, or wallet balances.
 
 OpenAI Codex limits are account-wide. Focusing a different session changes which meter is selected; it does not create a new quota.
+
+## Declarative definitions
+
+A fixed read-only HTTPS endpoint with a JSON body can be added without a Python adapter. The definition is versioned data (`hermes.provider-usage.definition/1`), loaded from the bundled catalog or `$HERMES_HOME/provider-usage/providers/*.json`. It maps dot paths into 5-hour, daily, weekly, monthly, rolling, or custom windows and into credit/currency balances.
+
+The boundary is deliberately narrow:
+
+- HTTPS GET, default port, exact host allow-list, no query string, no redirects;
+- only public DNS answers; loopback, private, link-local, reserved, and multicast addresses are refused;
+- credential *references* (environment or existing Hermes provider), never literal header values or secrets;
+- strict unknown-key rejection, bounded response size/time, and a 30–86,400 second cache;
+- missing paths stay unavailable or unverified, never zero.
+
+Definitions cannot express OAuth refresh, multi-step requests, writes, HTML scraping, or arbitrary code. Those still require a Python adapter.
 
 ## Adapter requirements
 

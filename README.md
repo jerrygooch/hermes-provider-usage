@@ -49,6 +49,7 @@ If the bar is visible but the chip still isn't there, check that **Provider Usag
 | SuperGrok / xAI OAuth | SuperGrok subscription quota and reset data returned by the Grok billing endpoint |
 | Ollama Cloud | Subscription windows (5-hour, weekly, and monthly credit usage, whichever the account reports) and per-model request counts |
 | Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it |
+| Declarative JSON | Any documented read-only HTTPS usage/balance endpoint you describe with the bundled schema (GitHub rate limits ship ready to use) |
 
 OpenCode appears as one provider family in the popover/page, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin does not treat one as the other's balance.
 
@@ -65,6 +66,51 @@ See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, limitati
 5. Preserve the provider's own currency, timestamps, and unavailable states.
 
 The focused session selects the meter. It does not own a private quota.
+
+## Bring your own read-only usage API
+
+Provider Usage 0.10 adds **declarative definitions**: a versioned JSON file can describe a fixed read-only HTTPS endpoint and map its JSON into provider cards. It is data only — no scripts, `eval`, templates, arbitrary header values, or literal credentials.
+
+Three definitions ship in the catalog:
+
+- **GitHub API rate limit** — works without a credential and shows the core, search, and GraphQL request windows for this machine or the configured token. This is a request rate limit, not a model-token allowance.
+- **Moonshot / Kimi balance** — prepaid balance; references `MOONSHOT_API_KEY`.
+- **ElevenLabs subscription** — character allowance and reset; references `ELEVENLABS_API_KEY`.
+
+The page lists connected definitions, **Available to connect** entries that name the missing environment variable, and **Invalid definition** entries with the exact validation error. Missing mapped values stay **Unavailable** and are never shown as zero.
+
+To add one:
+
+1. Copy `dashboard/definitions/TEMPLATE.json` to `$HERMES_HOME/provider-usage/providers/<id>.json` (for a named profile: `$HERMES_HOME/profiles/<profile>/provider-usage/providers/`).
+2. Use a documented HTTPS endpoint, list its host in `request.hosts`, and reference credentials instead of embedding them.
+3. Map JSON paths into windows or balances. Supported window kinds are 5-hour, daily, weekly, monthly, rolling, and custom; values can be percent, requests, tokens, characters, USD, credits, or custom units.
+4. Validate locally, then refresh the page:
+
+```bash
+python scripts/validate_definition.py ~/.hermes/provider-usage/providers/my-api.json
+```
+
+A profile definition that reuses a bundled id is rejected unless it sets `"override": true`, and ids reserved by built-in adapters are refused. See [dashboard/definitions/README.md](dashboard/definitions/README.md) for the schema reference, collision rules, and safety boundaries.
+
+### What the definition boundary allows
+
+- **HTTPS GET only**, default port, no query string or credentials in the URL, exact host allow-list, no redirects. An authorization header is therefore never forwarded to another host.
+- **Public DNS only** — loopback, private, link-local, reserved, and multicast addresses are refused before the request. Proxy and `.netrc` discovery are disabled so the checked peer is the real peer.
+- **Bounded response** — 512 KiB cap, 10-second read timeout, JSON content-type check.
+- **Credential references**, resolved in the backend from the profile environment or an existing Hermes provider entry. The renderer receives labels, numbers, states, and provenance — never a key, token, or raw response.
+- **Data-only dot paths**, strict unknown-key rejection, and a 30–86,400 second cache TTL. The last good row can be shown as **Stale data** with the failure attached.
+
+Complex protocols still need a Python adapter: OAuth refresh, gRPC, HTML scraping, write operations, and multi-step requests are intentionally out of scope.
+
+### Prepare a portable definition
+
+The packaging script validates, canonicalizes, and rejects secret-looking values and machine-local paths. It writes a small package under `dist/contributions/<id>/` and never calls GitHub:
+
+```bash
+python scripts/package-definition.py ~/.hermes/provider-usage/providers/my-api.json
+```
+
+Review the package, then open a catalog pull request manually. No automatic publication is performed.
 
 ## Architecture
 
@@ -91,6 +137,7 @@ cp desktop/plugin.js "$HERMES_HOME/desktop-plugins/provider-usage/plugin.js"
 mkdir -p "$HERMES_HOME/plugins/provider-usage/dashboard"
 cp dashboard/plugin_api.py dashboard/manifest.json \
   "$HERMES_HOME/plugins/provider-usage/dashboard/"
+cp -R dashboard/definitions "$HERMES_HOME/plugins/provider-usage/dashboard/"
 cp -R dashboard/dist "$HERMES_HOME/plugins/provider-usage/dashboard/"
 ```
 
@@ -116,12 +163,12 @@ The shipped plugin file (`desktop/plugin.js`) is plain ESM with **no runtime npm
 
 ```bash
 npm ci          # install the devDependencies (jsdom, react, react-dom)
-npm run check   # plugin syntax + jsdom/render/scope/lifecycle suites + dashboard py_compile
+npm run check   # plugin syntax + jsdom/render/scope/lifecycle + Python definition tests + catalog validation
 # or
 bash scripts/validate.sh
 ```
 
-The browser component harness (real Chromium, real SDK primitives, per-fixture PNG evidence + a lifecycle assertion for the profile round-trip) is separate:
+The browser component harness (real Chromium/Edge, real SDK primitives, per-fixture PNG evidence + a lifecycle assertion for the profile round-trip) is separate:
 
 ```bash
 node harness/build.mjs && node harness/capture.mjs && node harness/verify.mjs
@@ -140,7 +187,16 @@ The fixture suite covers:
 - OpenCode Go's compact 5-hour/weekly chip and complete three-window page;
 - separate OpenCode Go and Zen funding semantics;
 - SuperGrok's conservative plan label;
-- paid fallback after subscription exhaustion.
+- paid fallback after subscription exhaustion;
+- declarative GitHub windows plus the available/invalid catalog states.
+
+The live GitHub rate-limit definition can be checked without credentials:
+
+```bash
+python scripts/live-check-github.py
+```
+
+The definition schema is documented in [dashboard/definitions/README.md](dashboard/definitions/README.md). Local development packages are produced with `python scripts/package-definition.py`; the script never publishes.
 
 ## Security
 
@@ -150,7 +206,9 @@ Before publication, the repository is checked for credential-shaped values, auth
 
 ## Status
 
-This is an experimental plugin. Provider account APIs can change without notice, especially OAuth and web-app endpoints. Stable documented APIs are preferred; experimental adapters are identified in the support table rather than presented as permanent integrations.
+Provider Usage 0.10 is an experimental plugin. Provider account APIs can change without notice, especially OAuth and web-app endpoints. Stable documented APIs are preferred; experimental adapters are identified in the support table rather than presented as permanent integrations. Declarative definitions cover simple documented read-only APIs; everything else still needs a reviewed Python adapter.
+
+See [docs/hackathon-readiness.md](docs/hackathon-readiness.md) for the local verification evidence, honest gaps, and the short demo outline.
 
 ## Help wanted
 

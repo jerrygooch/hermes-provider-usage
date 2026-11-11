@@ -54,6 +54,12 @@ const EXPECT = {
     needles: ['OpenAI Codex', 'wk 84%', '62% left', 'Ollama Cloud', 'DeepSeek', 'SuperGrok', 'Limited data (1)', 'shared across every Codex session'],
     chipNeedle: 'Codex',
     chipGovern: 'wk 84%'
+  },
+  'declarative-catalog': {
+    registeredName: 'Provider Usage',
+    needles: ['GitHub API rate limit', 'Core', 'Available to connect', 'MOONSHOT_API_KEY', 'No scripts, no eval', 'mapping.windows[0].label', 'Definition'],
+    chipNeedle: 'GitHub',
+    chipGovern: 'Core'
   }
 }
 
@@ -157,7 +163,7 @@ for (const label of labels) {
     if (!(s1.paneText || '').includes("isn't enabled or installed in chaosforge")) p1.push('pane missing explicit backend-unavailable copy')
     if ((s1.paneText || '').includes('5h 62%')) p1.push('pane served default rows under chaosforge (wrong-account stale)')
     if ((s1.paneText || '').includes('Account limits')) p1.push('pane rendered account rows under a missing backend')
-    if (!(s1.chipText || '').includes('not enabled in chaosforge')) p1.push('chip missing explicit backend-unavailable copy')
+    if (!(s1.chipText || '').includes('plugin not enabled')) p1.push('chip missing explicit backend-unavailable copy')
     if ((s1.chipText || '').includes('5h 62%') || (s1.chipText || '').includes('$43.50')) p1.push('chip served a wrong-account figure under chaosforge')
     chipGeometryOK(s1.chipButton, 'lifecycle.step1.chip', p1)
     if (p1.length) problem(problems, 'lifecycle.step1 (chaosforge no backend)', p1.join('; '))

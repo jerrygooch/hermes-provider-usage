@@ -19,7 +19,13 @@ const dist = path.join(__dirname, 'dist')
 const shots = path.join(dist, 'shots')
 fs.mkdirSync(shots, { recursive: true })
 
-const CHROME = process.env.HARNESS_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+const CHROME_CANDIDATES = [
+  process.env.HARNESS_CHROME,
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe'
+].filter(Boolean)
+const CHROME = CHROME_CANDIDATES.find(candidate => fs.existsSync(candidate)) || CHROME_CANDIDATES[0]
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
 const PORT = 8932
 const CDP_PORT = 9341 // unrelated tools commonly hold 9333 — pick a rarely-used port

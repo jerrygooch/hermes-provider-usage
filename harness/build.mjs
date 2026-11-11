@@ -24,10 +24,16 @@ const repoRoot = path.resolve(__dirname, '..')
 // Portable: honor HERMES_AGENT_ROOT, else the standard install location for the
 // current user. Never a hardcoded personal path.
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT || path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'hermes-agent')
-// esbuild ships inside hermes-agent's node_modules; import it by absolute path
+// esbuild ships with the desktop app's node_modules in current Hermes
+// checkouts; older installs hoist it to the repo root. Import by absolute path
 // because the harness worktree has no node_modules of its own.
-const esbuildUrl = pathToFileURL(path.join(HERMES_AGENT_ROOT, 'node_modules', 'esbuild', 'lib', 'main.js')).href
-const { build } = await import(esbuildUrl)
+const esbuildCandidates = [
+  path.join(HERMES_AGENT_ROOT, 'apps', 'desktop', 'node_modules', 'esbuild', 'lib', 'main.js'),
+  path.join(HERMES_AGENT_ROOT, 'node_modules', 'esbuild', 'lib', 'main.js')
+]
+const esbuildPath = esbuildCandidates.find(candidate => fs.existsSync(candidate))
+if (!esbuildPath) throw new Error(`esbuild not found under ${HERMES_AGENT_ROOT}. Set HERMES_AGENT_ROOT`)
+const { build } = await import(pathToFileURL(esbuildPath).href)
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name)
@@ -49,8 +55,11 @@ const entrySrc = `import { mountPlugin } from './app-mount.js'\nimport plugin fr
 fs.writeFileSync(entry, entrySrc, 'utf8')
 
 const desktopSrc = path.join(HERMES_AGENT_ROOT, 'apps', 'desktop', 'src')
-const reactDir = path.join(HERMES_AGENT_ROOT, 'node_modules', 'react')
-const reactDomDir = path.join(HERMES_AGENT_ROOT, 'node_modules', 'react-dom')
+const reactRoot = [path.join(HERMES_AGENT_ROOT, 'apps', 'desktop', 'node_modules'), path.join(HERMES_AGENT_ROOT, 'node_modules')]
+  .find(candidate => fs.existsSync(path.join(candidate, 'react', 'package.json')))
+if (!reactRoot) throw new Error(`React not found under ${HERMES_AGENT_ROOT}. Set HERMES_AGENT_ROOT`)
+const reactDir = path.join(reactRoot, 'react')
+const reactDomDir = path.join(reactRoot, 'react-dom')
 
 const result = await build({
   entryPoints: [entry],

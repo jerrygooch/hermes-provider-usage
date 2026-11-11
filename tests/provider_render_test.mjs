@@ -122,7 +122,7 @@ const renderPage = () => renderToStaticMarkup(React.createElement(pageContributi
 // The provider is resolved asynchronously from the focused session. Under SSR
 // effects do not run, so seed the account memory the hook starts from (a real
 // mounted lifecycle is covered by plugin_lifecycle_test.mjs).
-const { activeSourceId, rememberProvider } = mod.namespace
+const { activeSourceId, rememberProvider, DefinitionPanel } = mod.namespace
 function seedProvider(profile = 'default', provider = 'xai-oauth') {
   world.sessionId = ''
   rememberProvider(activeSourceId(world.connectionId, profile), provider)
@@ -269,6 +269,82 @@ queryResult = { data: null, isLoading: false, isError: true, isFetching: false, 
 const pageMissingBackend = renderPage()
 check('#7 missing backend surfaces explicit not-enabled copy', pageMissingBackend, 'enabled or installed in default')
 check('#7 missing backend says Hermes never edits profiles', pageMissingBackend, 'Hermes never edits profiles automatically')
+
+// Declarative definition row + available-to-connect catalog.
+const definitionRow = {
+  id: 'github-rate-limit',
+  label: 'GitHub API rate limit',
+  definition: true,
+  definition_id: 'github-rate-limit',
+  definition_version: 1,
+  definition_source: 'bundled',
+  state: 'ok',
+  available: true,
+  capability: 'usage',
+  label: 'GitHub API rate limit',
+  plan: 'Rate limit',
+  limits: [{ id: 'default', label: 'GitHub REST API', windows: [
+    { label: 'Core', kind: 'rolling', rolling: true, unit: 'requests', used: 5, limit: 60, remaining: 55, used_percent: 8.33, remaining_percent: 91.67, reset_at: '2026-11-11T03:03:07Z', detail: '5 of 60 requests' }
+  ] }],
+  balances: [],
+  details: ['GitHub REST API request windows for this machine.'],
+  provenance: {
+    kind: 'declarative',
+    definition_id: 'github-rate-limit',
+    definition_version: 1,
+    definition_source: 'bundled',
+    definition_file: 'github-rate-limit.json',
+    docs_url: 'https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api',
+    endpoint_host: 'api.github.com',
+    fetched_at: '2026-11-11T02:03:07Z',
+    checked_at: '2026-11-11T02:03:08Z',
+    cache: 'hit',
+    ttl_seconds: 60,
+    scope: 'default',
+    overrides: null
+  },
+  freshness: { fetched_at: '2026-11-11T02:03:07Z', age_seconds: 42, stale: false, ttl_seconds: 60 }
+}
+
+const definitionCatalog = {
+  version: 1,
+  profile: 'default',
+  directory: '$HERMES_HOME/provider-usage/providers',
+  counts: { connected: 1, available: 1, invalid: 1 },
+  definitions: [
+    { id: 'github-rate-limit', name: 'GitHub API rate limit', state: 'connected', source: 'bundled', version: 1, host: 'api.github.com', setup: { directory: '$HERMES_HOME/provider-usage/providers', file: 'github-rate-limit.json' } },
+    { id: 'moonshot-balance', name: 'Moonshot / Kimi balance', description: 'Prepaid API balance reported by the Moonshot Open Platform.', state: 'available', source: 'bundled', stability: 'stable', version: 1, host: 'api.moonshot.ai', missing_credentials: ['MOONSHOT_API_KEY'], setup: { directory: '$HERMES_HOME/provider-usage/providers', file: 'moonshot-balance.json' }, docs_url: 'https://platform.kimi.ai/docs/api/balance' },
+    { id: 'broken-def', name: 'Broken definition', state: 'invalid', source: 'profile', errors: ['mapping.windows[0].label: must not be empty'], warnings: [] }
+  ]
+}
+
+world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+world.gateway = 'open'
+seedProvider('default')
+queryResult = {
+  data: { ...fixture('2026-11-11T02:03:07Z'), providers: [definitionRow, ...fixture('2026-11-11T02:03:07Z').providers], catalog: definitionCatalog },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  error: null,
+  refetch: () => {}
+}
+const pageDefinitions = renderPage()
+check('catalog section renders available-to-connect entries', pageDefinitions, 'Available to connect')
+check('catalog names the missing credential', pageDefinitions, 'Needs MOONSHOT_API_KEY')
+check('catalog keeps invalid definitions visible with an error', pageDefinitions, 'mapping.windows[0].label: must not be empty')
+check('catalog explains the safe data-only model', pageDefinitions, 'No scripts, no eval')
+check('definition row shows its state badge', pageDefinitions, 'Definition')
+check('definition row keeps its windows', pageDefinitions, 'Core')
+
+const panelHtml = renderToStaticMarkup(React.createElement(DefinitionPanel, { row: definitionRow }))
+check('definition panel names the bundled source', panelHtml, 'Bundled definition github-rate-limit v1')
+check('definition panel shows cache and scope provenance', panelHtml, 'cached response')
+check('definition panel shows the endpoint host', panelHtml, 'api.github.com')
+check('definition panel shows the docs URL', panelHtml, 'docs.github.com')
 
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)
