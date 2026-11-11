@@ -36,9 +36,10 @@ A fixed read-only HTTPS endpoint with a JSON response may be contributed as a de
 
 - Put bundled definitions in `dashboard/definitions/catalog/` and validate with `python scripts/validate_definition.py dashboard/definitions/catalog`.
 - Use `dashboard/definitions/TEMPLATE.json` and the schema reference in `dashboard/definitions/README.md`.
-- Reference credentials with `{"source":"env","name":"..."}` or a Hermes provider field; never include the value.
-- Exercise the page states: connected, available (missing credential), invalid, needs permission, unverified mapping, and stale. Missing paths must not render as zero.
-- Package a contribution locally with `python scripts/package-definition.py <file>`. The script performs no network call and does not publish; open a PR manually after review.
+- Reference credentials with `{"source":"env","name":"..."}`; never include the value. `hermes_provider` references are not supported in schema v1 and are rejected with an explicit error.
+- Remember that a profile-local definition is **not usable until the local user approves it** with `python scripts/approve_definition.py <file>`. Approval is fingerprint-bound; editing the file revokes it. Never ship or commit an `approvals.json`; never make approval automatic.
+- Exercise the page states: connected, available (missing credential), requires approval, blocked (fingerprint changed), invalid, needs permission, unverified mapping, and stale. Missing paths must not render as zero.
+- Package a contribution locally with `python scripts/package-definition.py <file>`. The script performs no network call, never includes an approval, and does not publish; open a PR manually after review.
 
 OAuth refresh, multi-step flows, writes, gRPC, and HTML scraping still require a Python adapter.
 

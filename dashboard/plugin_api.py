@@ -1,8 +1,9 @@
 """Provider usage and balance API for the Hermes Desktop provider-usage plugin.
 
 The desktop plugin talks only to this scoped backend namespace. Provider
-credentials are resolved by Hermes' existing runtime/auth machinery and never
-cross the plugin API boundary or enter the returned JSON.
+credentials are resolved by Hermes core's public read-only usage seams, the
+xAI credential broker, or profile-scoped `secret_scope` for declarative
+definitions; they never cross the plugin API boundary or enter returned JSON.
 """
 
 import concurrent.futures
@@ -168,8 +169,59 @@ def _unavailable(provider: str, reason: str, *, configured: bool = True) -> dict
     return row
 
 
+def _snapshot_raw(snapshot: Any) -> dict[str, Any]:
+    raw = getattr(snapshot, "raw", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _stamp_snapshot(row: dict[str, Any], snapshot: Any) -> dict[str, Any]:
+    """Carry the core-owned, non-secret snapshot identity onto the row.
+
+    ``identity_id``/``account_id``/``profile_scope`` are correlation ids the
+    delegation roster publishes; none is a token. A snapshot that could not
+    prove its credential leaves them absent so callers render "unknown" rather
+    than attach another account's balance.
+    """
+    fetched_at = getattr(snapshot, "fetched_at", None)
+    if isinstance(fetched_at, datetime):
+        row["fetched_at"] = _datetime(fetched_at) or row["fetched_at"]
+    for source, key in (
+        ("identity_id", "identity_id"),
+        ("account_id", "account_id"),
+        ("profile_scope", "profile_scope"),
+    ):
+        value = str(getattr(snapshot, source, None) or "").strip()
+        if value:
+            row[key] = value
+    return row
+
+
 def _serialize_snapshot(snapshot: Any) -> dict[str, Any]:
     provider = str(getattr(snapshot, "provider", "") or "")
+    # Core-owned snapshots carry the exact decoded provider body on ``raw`` for
+    # providers whose normalized details cannot express the pane's fields:
+    # OpenRouter's free-model quota/key spend/BYOK, DeepSeek's per-currency
+    # granted/topped-up rows, Ollama's activity report and allowance window, and
+    # OpenCode Go's whole usage body. The parsers below are the same ones the
+    # adapters have always used; only the fetch moved into core.
+    raw = _snapshot_raw(snapshot)
+    if provider == "openrouter" and isinstance(raw.get("credits"), dict):
+        raw_key = raw.get("key")
+        key_data = raw_key if isinstance(raw_key, dict) else {}
+        return _stamp_snapshot(_openrouter_row(raw["credits"], key_data), snapshot)
+    if provider == "deepseek" and isinstance(raw.get("balance"), dict):
+        return _stamp_snapshot(_deepseek_row(raw["balance"]), snapshot)
+    if provider == "ollama-cloud" and isinstance(raw.get("usage"), dict):
+        row = _ollama_usage_row(raw["usage"])
+        balance = raw.get("balance")
+        if isinstance(balance, dict) and balance:
+            _apply_ollama_balance(row, balance)
+        return _stamp_snapshot(row, snapshot)
+    if provider == "opencode-zen":
+        models = raw.get("models")
+        return _stamp_snapshot(_zen_row(models), snapshot)
+    if provider == "opencode-go":
+        return _stamp_snapshot(_go_row(snapshot), snapshot)
     row = _base(
         provider,
         title=str(getattr(snapshot, "title", "Account limits") or "Account limits"),
@@ -178,24 +230,26 @@ def _serialize_snapshot(snapshot: Any) -> dict[str, Any]:
     )
     windows = []
     for item in getattr(snapshot, "windows", ()) or ():
-        windows.append(
-            _window(
-                str(getattr(item, "label", "Limit") or "Limit"),
-                getattr(item, "used_percent", None),
-                getattr(item, "reset_at", None),
-                getattr(item, "detail", None),
-            )
+        window = _window(
+            str(getattr(item, "label", "Limit") or "Limit"),
+            getattr(item, "used_percent", None),
+            getattr(item, "reset_at", None),
+            getattr(item, "detail", None),
         )
+        # A model-scoped window (Anthropic Opus/Sonnet week) must never read as
+        # account-wide exhaustion. The value is non-secret and the pane ignores
+        # it, but the normalized row keeps it for other consumers.
+        scope = str(getattr(item, "scope", "") or "").strip()
+        if scope and scope != "account":
+            window["scope"] = scope
+        windows.append(window)
     if windows:
         row["limits"] = [{"id": "default", "label": row["title"], "windows": windows}]
     row["details"] = [str(value) for value in (getattr(snapshot, "details", ()) or ())]
     reason = getattr(snapshot, "unavailable_reason", None)
     row["unavailable_reason"] = str(reason) if reason else None
     row["available"] = bool((windows or row["details"]) and not row["unavailable_reason"])
-    fetched_at = getattr(snapshot, "fetched_at", None)
-    if isinstance(fetched_at, datetime):
-        row["fetched_at"] = _datetime(fetched_at) or row["fetched_at"]
-    return row
+    return _stamp_snapshot(row, snapshot)
 
 
 def _safe_request_error(exc: BaseException) -> str:
@@ -209,14 +263,71 @@ def _safe_request_error(exc: BaseException) -> str:
     return f"{type(exc).__name__} while reading provider data."
 
 
-def _runtime(provider: str, *, base_url: Optional[str] = None, api_key: Optional[str] = None) -> dict[str, Any]:
-    from hermes_cli.runtime_provider import resolve_runtime_provider
+_CORE_SEAM_UPGRADE = (
+    "This Hermes build does not expose the read-only provider-usage core seam "
+    "(fetch_account_usage(read_only=True) with provider bodies and non-secret account "
+    "identities). Upgrade Hermes to a build containing core commits 622eb3219f and "
+    "a4c484eb5d, or a release that includes them. The plugin keeps no token and has no "
+    "raw-credential fallback."
+)
 
-    return resolve_runtime_provider(
-        requested=provider,
-        explicit_base_url=base_url,
-        explicit_api_key=api_key,
+
+def _core_seam_available() -> bool:
+    """True only when every public usage seam this plugin relies on is present.
+
+    Older Hermes builds have a partial account-usage module. Calling through it
+    would either lose the raw provider body or fall back to a non-read-only fetch
+    that may rotate a credential, so the adapters report an upgrade-required row
+    instead of using a legacy path.
+    """
+    try:
+        from agent.account_usage import (  # noqa: F401
+            fetch_account_usage,
+            list_account_usage_identities,
+            provider_credential_summary,
+        )
+    except Exception:
+        return False
+    return all(
+        callable(value)
+        for value in (fetch_account_usage, list_account_usage_identities, provider_credential_summary)
     )
+
+
+def _core_usage(provider: str, *, identity_id: Optional[str] = None) -> Any:
+    """Read one provider/account snapshot through the public core seam.
+
+    ``identity_id`` is the exact non-secret id from
+    ``list_account_usage_identities``; core resolves the pooled credential. A
+    missing identity returns ``None`` and is never retried as a provider-wide
+    read, which would borrow another account's pool.
+    """
+    if not _core_seam_available():
+        return None
+    from agent.account_usage import fetch_account_usage
+
+    return fetch_account_usage(provider, read_only=True, identity_id=identity_id)
+
+
+def _credential_summary(provider: str) -> dict[str, Any]:
+    """Non-secret presence summary from core; no credential value crosses this call."""
+    try:
+        from agent.account_usage import provider_credential_summary
+
+        return provider_credential_summary(provider) or {}
+    except Exception:
+        return {}
+
+
+def _provider_unavailable(provider: str) -> dict[str, Any]:
+    """An honest unavailable row: missing credentials vs. missing core seam."""
+    if not _core_seam_available():
+        return _unavailable(provider, _CORE_SEAM_UPGRADE)
+    if not _credential_summary(provider).get("configured"):
+        label = _PROVIDER_LABELS.get(provider, provider)
+        return _unavailable(provider, f"{label} credentials are not configured.")
+    label = _PROVIDER_LABELS.get(provider, provider)
+    return _unavailable(provider, f"{label} usage is unavailable for this account.")
 
 
 def _fetch_codex() -> dict[str, Any]:
@@ -225,9 +336,11 @@ def _fetch_codex() -> dict[str, Any]:
     # refresh path. The decoded response body rides back on ``snapshot.raw``; the
     # groups core does not normalize yet (metered features, code review, spend
     # control) are read from it below instead of re-requesting the endpoint.
+    if not _core_seam_available():
+        return _provider_unavailable("openai-codex")
     from agent.account_usage import fetch_account_usage
 
-    snapshot = fetch_account_usage("openai-codex")
+    snapshot = fetch_account_usage("openai-codex", read_only=True)
     if snapshot is None:
         raise RuntimeError("Codex usage is unavailable")
     payload = getattr(snapshot, "raw", None)
@@ -378,24 +491,18 @@ def _fetch_codex() -> dict[str, Any]:
 
 
 def _fetch_openrouter() -> dict[str, Any]:
-    runtime = _runtime("openrouter")
-    token = str(runtime.get("api_key") or "").strip()
-    if not token:
-        raise RuntimeError("no OpenRouter credentials")
-    base_url = str(runtime.get("base_url") or "").rstrip("/")
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    with httpx.Client(timeout=12.0) as client:
-        credits_response = client.get(f"{base_url}/credits", headers=headers)
-        credits_response.raise_for_status()
-        credits = (credits_response.json() or {}).get("data") or {}
-        key_data: dict[str, Any] = {}
-        try:
-            key_response = client.get(f"{base_url}/key", headers=headers)
-            key_response.raise_for_status()
-            key_data = (key_response.json() or {}).get("data") or {}
-        except httpx.HTTPError:
-            log.debug("OpenRouter /key endpoint unavailable", exc_info=True)
+    # Fetch, credential resolution and the per-profile usage cache live in
+    # Hermes core. The decoded /credits and /key bodies ride back on
+    # ``snapshot.raw`` so this pane keeps its free-model quota, key spend and
+    # BYOK fields; a core build without them is an explicit upgrade row rather
+    # than a silently narrowed one.
+    snapshot = _core_usage("openrouter")
+    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("credits"), dict):
+        return _provider_unavailable("openrouter")
+    return _serialize_snapshot(snapshot)
 
+
+def _openrouter_row(credits: dict[str, Any], key_data: dict[str, Any]) -> dict[str, Any]:
     total = _number(credits.get("total_credits"))
     used = _number(credits.get("total_usage"))
     row = _base("openrouter", title="OpenRouter credits", source="credits_api")
@@ -458,23 +565,8 @@ def _fetch_openrouter() -> dict[str, Any]:
     return row
 
 
-def _deepseek_root(base_url: str) -> str:
-    value = base_url.rstrip("/")
-    if value.endswith("/v1"):
-        value = value[:-3]
-    return value.rstrip("/")
-
-
-def _fetch_deepseek() -> dict[str, Any]:
-    runtime = _runtime("deepseek")
-    token = str(runtime.get("api_key") or "").strip()
-    if not token:
-        raise RuntimeError("no DeepSeek credentials")
-    url = f"{_deepseek_root(str(runtime.get('base_url') or ''))}/user/balance"
-    with httpx.Client(timeout=12.0) as client:
-        response = client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-        response.raise_for_status()
-    payload = response.json() or {}
+def _deepseek_row(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize DeepSeek's ``/user/balance`` body (core-owned raw)."""
     infos = payload.get("balance_infos") or payload.get("balances") or []
     if isinstance(infos, dict):
         infos = [infos]
@@ -504,51 +596,39 @@ def _fetch_deepseek() -> dict[str, Any]:
     return row
 
 
-def _fetch_opencode_go() -> dict[str, Any]:
-    # The usage endpoint + parse live in the bundled OpenCode Go provider profile
-    # (its ``fetch_account_usage`` hook); core runs it and remembers the result in
-    # the same per-profile cache the model pickers read.
-    from agent.account_usage import fetch_account_usage
+def _fetch_deepseek() -> dict[str, Any]:
+    snapshot = _core_usage("deepseek")
+    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("balance"), dict):
+        return _provider_unavailable("deepseek")
+    return _serialize_snapshot(snapshot)
 
-    snapshot = fetch_account_usage("opencode-go")
-    if snapshot is None:
-        # Core swallows hook errors and a missing key as None. Read the usage
-        # endpoint once so the pane can say why, instead of "no windows".
-        runtime = _runtime("opencode-go")
-        token = str(runtime.get("api_key") or "").strip()
-        if not token:
-            return _unavailable("opencode-go", "OpenCode Go credentials are not configured.")
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                response = client.get(
-                    "https://opencode.ai/zen/go/v1/usage",
-                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                )
-                response.raise_for_status()
-            usage = (response.json() or {}).get("usage") or {}
-        except Exception as exc:
-            return _unavailable("opencode-go", _safe_request_error(exc))
-        from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
 
-        parsed = []
-        for key, label in (("rolling", "Rolling window"), ("weekly", "Weekly"), ("monthly", "Monthly")):
-            window = usage.get(key) or {}
-            if not isinstance(window, dict) or window.get("percent") is None:
+def _go_usage_windows(snapshot: Any) -> list[dict[str, Any]]:
+    """OpenCode Go windows from the core-owned whole ``{"usage": …}`` body."""
+    raw = _snapshot_raw(snapshot)
+    usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else None
+    windows: list[dict[str, Any]] = []
+    if isinstance(usage, dict):
+        for key, label in (("rolling", "5-hour"), ("weekly", "Weekly"), ("monthly", "Monthly")):
+            window = usage.get(key)
+            if not isinstance(window, dict) or _number(window.get("percent")) is None:
                 continue
-            parsed.append(AccountUsageWindow(
-                label=label,
-                used_percent=float(window["percent"]),
-                reset_at=window.get("resetsAt"),
-            ))
-        snapshot = AccountUsageSnapshot(provider="opencode-go", source="go_usage_api", fetched_at=datetime.now(timezone.utc), windows=tuple(parsed))
-    windows = []
+            windows.append(_window(label, window.get("percent"), window.get("resetsAt")))
+        if windows:
+            return windows
+    # A plugin profile hook may normalize windows without a raw body; those are
+    # already the same labels the bundled Go endpoint reports.
     for window in (getattr(snapshot, "windows", ()) or ()):
         label = str(getattr(window, "label", "") or "Limit")
         if label.strip().lower().startswith("rolling"):
             label = "5-hour"  # same rolling window, this pane's label
-        windows.append(_window(label, getattr(window, "used_percent", None), getattr(window, "reset_at", None),
-                               getattr(window, "detail", None)))
+        windows.append(_window(label, getattr(window, "used_percent", None),
+                               getattr(window, "reset_at", None), getattr(window, "detail", None)))
+    return windows
 
+
+def _go_row(snapshot: Any) -> dict[str, Any]:
+    windows = _go_usage_windows(snapshot)
     row = _base("opencode-go", title="OpenCode usage", source="go_usage_api", plan="Go subscription")
     if windows:
         remaining = [window.get("remaining_percent") for window in windows]
@@ -595,19 +675,23 @@ def _fetch_opencode_go() -> dict[str, Any]:
     return row
 
 
-def _fetch_opencode_zen() -> dict[str, Any]:
-    """Verify Zen API access without scraping its browser-only wallet."""
-    runtime = _runtime("opencode-zen")
-    token = str(runtime.get("api_key") or "").strip()
-    if not token:
-        raise RuntimeError("OpenCode Zen API key is not configured")
-    base_url = str(runtime.get("base_url") or "https://opencode.ai/zen/v1").rstrip("/")
-    with httpx.Client(timeout=15.0) as client:
-        response = client.get(
-            f"{base_url}/models",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        )
-        response.raise_for_status()
+def _fetch_opencode_go() -> dict[str, Any]:
+    # Core prefers the bundled provider profile hook and falls back to its own
+    # read-only Go fetcher (whole body on ``raw``). Either way the credential is
+    # resolved inside core; the plugin has no direct /usage fallback.
+    snapshot = _core_usage("opencode-go")
+    if snapshot is None:
+        return _provider_unavailable("opencode-go")
+    return _serialize_snapshot(snapshot)
+
+
+def _zen_row(models: Any = None) -> dict[str, Any]:
+    """Verify Zen API access without scraping its browser-only wallet.
+
+    ``models`` is the core-owned decoded ``/models`` body; its only role is to
+    prove the authenticated read succeeded. There is no wallet or spend field to
+    preserve, exactly as before the migration.
+    """
     detail = "Zen API access is authenticated. Credit balance and spend are not exposed through OpenCode API keys."
     row = _base("opencode-zen", title="OpenCode account", source="models_api", plan="Zen API credits")
     row["available"] = True
@@ -624,6 +708,13 @@ def _fetch_opencode_zen() -> dict[str, Any]:
         "demand": [],
     }]
     return row
+
+
+def _fetch_opencode_zen() -> dict[str, Any]:
+    snapshot = _core_usage("opencode-zen")
+    if snapshot is None:
+        return _provider_unavailable("opencode-zen")
+    return _serialize_snapshot(snapshot)
 
 
 # Minimal protobuf/gRPC-web reader for grok.com’s subscription credit meter.
@@ -742,6 +833,65 @@ _GROK_PRODUCT_LABELS = {
 }
 _GROK_PROXY = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 _GROK_SETTINGS = "https://cli-chat-proxy.grok.com/v1/settings"
+_GROK_BILLING_GRPC = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+_GROK_UPGRADE_REASON = (
+    "Grok credits need a newer Hermes core with brokered xAI sign-in. This Hermes build does not "
+    "route xai-oauth through credentialed_provider_request; upgrade Hermes (core commit dbe0bcec "
+    "or a release containing it). The plugin keeps no token and has no legacy fallback."
+)
+
+
+class _XaiBrokerUnavailable(RuntimeError):
+    """The running core predates the xai-oauth broker route; do not read a raw token instead."""
+
+
+class _XaiAuthFailure(RuntimeError):
+    """The sign-in, permission or endpoint policy failed; never fall back to another route."""
+
+
+class _XaiHTTPFailure(RuntimeError):
+    """A non-auth provider HTTP failure; the credits proxy may still have the gRPC fallback."""
+
+
+def _credentialed_xai_request(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    content: Optional[bytes] = None,
+    timeout: float = 15.0,
+) -> Any:
+    """Call Hermes's broker; the subscription token never enters this process's plugin code."""
+    try:
+        from hermes_cli.plugin_provider_requests import ProviderNotSignedIn, credentialed_provider_request
+    except ImportError:
+        raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+    kwargs: dict[str, Any] = {"headers": headers, "timeout": timeout}
+    if content is not None:
+        kwargs["content"] = content
+    try:
+        return credentialed_provider_request("xai-oauth", method, url, **kwargs)
+    except ProviderNotSignedIn as exc:
+        raise _XaiAuthFailure(str(exc)) from None
+    except PermissionError as exc:
+        raise _XaiAuthFailure(str(exc)) from None
+    except TypeError as exc:
+        # Older cores expose the helper without ``content=`` (the dbe0bcec
+        # bytes-body seam). Do not fall through to a raw token; report upgrade.
+        if "unexpected keyword argument" in str(exc):
+            raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+        raise
+    except ValueError as exc:
+        if "No signed-in requests for provider" in str(exc):
+            raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+        raise
+
+
+def _raise_for_xai_status(status: int) -> None:
+    if status in (401, 403):
+        raise _XaiAuthFailure(f"xAI rejected the Hermes sign-in (HTTP {status}).")
+    if status >= 400:
+        raise _XaiHTTPFailure(f"xAI endpoint returned HTTP {status}.")
 
 
 def _grok_product_label(raw: Any) -> str:
@@ -796,12 +946,15 @@ def _reconcile_breakdown(items: list[dict[str, Any]], aggregate: Optional[float]
     return rows
 
 
-def _grok_plan(client: httpx.Client, headers: dict[str, str]) -> Optional[str]:
+def _grok_plan(headers: dict[str, str]) -> Optional[str]:
     try:
-        response = client.get(_GROK_SETTINGS, headers=headers, timeout=2.0)
-        response.raise_for_status()
+        response = _credentialed_xai_request("GET", _GROK_SETTINGS, headers=headers, timeout=2.0)
+        _raise_for_xai_status(response.status)
         payload = response.json() or {}
     except Exception:
+        # Plan metadata is optional: keep the credits body even if /settings is
+        # unavailable. This is not a route fallback, so the no-auth-fallback
+        # rule for the billing/credits requests is unaffected.
         return None
     if not isinstance(payload, dict):
         return None
@@ -818,18 +971,16 @@ def _apply_grok_breakdown(row: dict[str, Any], products: list[dict[str, Any]], a
     row["breakdown_note"] = f"Shares of {pool}. Products at 0% are omitted by Grok."
 
 
-def _fetch_xai_proxy(token: str) -> dict[str, Any]:
+def _fetch_xai_proxy() -> dict[str, Any]:
     headers = {
-        "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "x-xai-token-auth": "xai-grok-cli",
         "User-Agent": "hermes-provider-usage/0.9",
     }
-    with httpx.Client(timeout=15.0) as client:
-        response = client.get(_GROK_PROXY, headers=headers)
-        response.raise_for_status()
-        payload = response.json() or {}
-        plan = _grok_plan(client, headers)
+    response = _credentialed_xai_request("GET", _GROK_PROXY, headers=headers, timeout=15.0)
+    _raise_for_xai_status(response.status)
+    payload = response.json() or {}
+    plan = _grok_plan(headers)
     if not isinstance(payload, dict):
         raise ValueError("xAI credits response was not an object")
     config = payload.get("config") if isinstance(payload.get("config"), dict) else payload
@@ -869,18 +1020,8 @@ def _fetch_xai_proxy(token: str) -> dict[str, Any]:
     return row
 
 
-def _fetch_xai() -> dict[str, Any]:
-    runtime = _runtime("xai-oauth")
-    token = str(runtime.get("api_key") or "").strip()
-    if not token:
-        raise RuntimeError("no xAI OAuth credentials")
-    try:
-        return _fetch_xai_proxy(token)
-    except Exception:
-        log.debug("xAI credits proxy unavailable; falling back to grok.com billing", exc_info=True)
-    endpoint = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+def _fetch_xai_grpc() -> dict[str, Any]:
     headers = {
-        "Authorization": f"Bearer {token}",
         "Content-Type": "application/grpc-web+proto",
         "Accept": "application/grpc-web+proto",
         "X-Grpc-Web": "1",
@@ -888,15 +1029,15 @@ def _fetch_xai() -> dict[str, Any]:
         "Referer": "https://grok.com/",
         "User-Agent": "hermes-provider-usage/0.9",
     }
-    with httpx.Client(timeout=15.0) as client:
-        response = client.post(endpoint, content=b"\x00\x00\x00\x00\x00", headers=headers)
-        response.raise_for_status()
-        payload = _decode_grpc_web(response.content, response.headers)
-        plan = _grok_plan(client, {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "x-xai-token-auth": "xai-grok-cli",
-        })
+    response = _credentialed_xai_request(
+        "POST", _GROK_BILLING_GRPC, content=b"\x00\x00\x00\x00\x00", headers=headers, timeout=15.0,
+    )
+    _raise_for_xai_status(response.status)
+    payload = _decode_grpc_web(response.body, httpx.Headers(response.headers))
+    plan = _grok_plan({
+        "Accept": "application/json",
+        "x-xai-token-auth": "xai-grok-cli",
+    })
     config = _first_message(payload, 1)
     if config is None:
         raise ValueError("xAI credit response did not contain a config")
@@ -928,14 +1069,28 @@ def _fetch_xai() -> dict[str, Any]:
     return row
 
 
-def _fetch_nous() -> dict[str, Any]:
-    from agent.account_usage import build_nous_credits_snapshot
-    from hermes_cli.nous_account import get_nous_portal_account_info
+def _fetch_xai() -> dict[str, Any]:
+    # The Grok token belongs to Hermes: core attaches it to these exact hosts through the
+    # credentialed-provider broker. This module never resolves or holds the OAuth grant.
+    try:
+        return _fetch_xai_proxy()
+    except (_XaiBrokerUnavailable, _XaiAuthFailure) as exc:
+        return _unavailable("xai-oauth", str(exc))
+    except Exception:
+        log.debug("xAI credits proxy unavailable; falling back to grok.com billing", exc_info=True)
+    try:
+        return _fetch_xai_grpc()
+    except (_XaiBrokerUnavailable, _XaiAuthFailure, _XaiHTTPFailure) as exc:
+        return _unavailable("xai-oauth", str(exc))
 
-    account = get_nous_portal_account_info(force_fresh=True)
-    snapshot = build_nous_credits_snapshot(account)
+
+def _fetch_nous() -> dict[str, Any]:
+    # Core's read-only Nous fetcher owns the portal helper and refresh policy;
+    # the plugin no longer imports the private account module. Nous credits are
+    # account-global and the snapshot carries no provider raw body.
+    snapshot = _core_usage("nous")
     if snapshot is None:
-        raise RuntimeError("Nous Portal did not return account credits")
+        return _provider_unavailable("nous")
     return _serialize_snapshot(snapshot)
 
 
@@ -1123,30 +1278,13 @@ def _apply_ollama_balance(row: dict[str, Any], payload: dict[str, Any]) -> None:
 
 
 def _fetch_ollama_cloud() -> dict[str, Any]:
-    runtime = _runtime("ollama-cloud")
-    token = str(runtime.get("api_key") or "").strip()
-    if not token:
-        raise RuntimeError("no Ollama Cloud credentials")
-    base_url = str(runtime.get("base_url") or "https://ollama.com/v1").rstrip("/")
-    if base_url.endswith("/v1"):
-        base_url = base_url[: -len("/v1")]
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    with httpx.Client(timeout=15.0) as client:
-        response = client.get(f"{base_url}/api/usage", headers=headers)
-        response.raise_for_status()
-        balance_payload: dict[str, Any] = {}
-        try:
-            balance = client.get(f"{base_url}/api/balance", headers=headers)
-            if balance.status_code == 200:
-                parsed = balance.json() or {}
-                if isinstance(parsed, dict):
-                    balance_payload = parsed
-        except httpx.HTTPError:
-            log.debug("Ollama Cloud balance endpoint unavailable", exc_info=True)
-    row = _ollama_usage_row(response.json() or {})
-    if balance_payload:
-        _apply_ollama_balance(row, balance_payload)
-    return row
+    # Core owns both ``/api/usage`` and ``/api/balance``; their decoded bodies
+    # ride on ``raw`` because the activity report and monthly allowance are not
+    # reconstructible from normalized windows.
+    snapshot = _core_usage("ollama-cloud")
+    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("usage"), dict):
+        return _provider_unavailable("ollama-cloud")
+    return _serialize_snapshot(snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -1161,13 +1299,22 @@ def _fetch_ollama_cloud() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
+_DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
 _PLUGIN_VERSION = "0.10.0"
 _DEFINITION_MAX_BYTES = 512 * 1024
 _DEFINITION_TIMEOUT_SECS = 10.0
+_DEFINITION_TOTAL_TIMEOUT_SECS = 20.0
+_DEFINITION_DNS_TIMEOUT_SECS = 3.0
+_DEFINITION_MAX_ADDRESSES = 8
 _DEFINITION_MAX_FILE_BYTES = 128 * 1024
+_DEFINITION_APPROVAL_MAX_BYTES = 256 * 1024
 _DEFINITION_CACHE: dict[str, dict[str, Any]] = {}
 _DEFINITION_CACHE_LOCK = threading.Lock()
 _DEFINITION_TRANSPORT: Any = None  # test seam; production leaves this None
+_DEFINITION_NAT64_NETWORKS = (
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("64:ff9b:1::/48"),
+)
 _DEFINITION_RESERVED_IDS = set(_SUPPORTED) | set(_PROVIDER_LABELS) | {v for v in _ALIASES.values() if v}
 _DEFINITION_HOST_RE = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
@@ -1200,16 +1347,47 @@ def _definition_bundled_dir() -> Path:
     return Path(__file__).resolve().parent / "definitions" / "catalog"
 
 
+def _hermes_home() -> Path:
+    """The effective Hermes home for this request (context override, then env, then default)."""
+    try:
+        from hermes_constants import get_hermes_home
+
+        return Path(get_hermes_home())
+    except Exception:
+        return Path.home() / ".hermes"
+
+
+def _canonical_home_key() -> str:
+    """Canonical, case-normalized identity of the effective Hermes home."""
+    try:
+        from hermes_constants import get_hermes_home, hermes_home_key
+
+        return hermes_home_key(get_hermes_home())
+    except Exception:
+        return os.path.normcase(str(_hermes_home().expanduser().resolve(strict=False)))
+
+
+def _hermes_home_scope() -> str:
+    """Short, non-path-leaking scope id used for cache keys and provenance.
+
+    A profile name is not enough: two homes can share a display name, and the
+    process-wide default is not an "active" bucket. Hashing the canonical home
+    keeps rows from different profiles (or a moved home) out of each other's
+    cache while still being stable within one install.
+    """
+    return "home:" + hashlib.sha256(_canonical_home_key().encode("utf-8")).hexdigest()[:16]
+
+
 def _definition_profile_dir() -> Path:
     override = str(os.environ.get("HERMES_PROVIDER_USAGE_DEFINITIONS") or "").strip()
     if override:
         return Path(override)
-    try:
-        from hermes_constants import get_hermes_home
+    return _hermes_home() / "provider-usage" / "providers"
 
-        return Path(get_hermes_home()) / "provider-usage" / "providers"
-    except Exception:
-        return Path.home() / ".hermes" / "provider-usage" / "providers"
+
+def _definition_approval_path(home: Optional[Path] = None) -> Path:
+    """Approval manifest lives outside the definition directory and outside packages."""
+    return (Path(home) if home is not None else _hermes_home()) / "provider-usage" / "approvals.json"
 
 
 def _definition_error(errors: list[str], path: str, message: str) -> None:
@@ -1341,13 +1519,24 @@ def _definition_https_url(value: Any, path: str, errors: list[str]) -> Optional[
     if parsed.query or parsed.fragment:
         _definition_error(errors, path, "query strings and fragments are not supported (schema v1)")
         return None
-    if parsed.port not in (None, 443):
+    try:
+        # urlsplit defers port parsing: a non-numeric or out-of-range port raises
+        # ValueError here. One malformed definition must never abort the catalog.
+        port = parsed.port
+        raw_host = parsed.hostname
+    except ValueError:
+        _definition_error(errors, path, "has an invalid port")
+        return None
+    if port not in (None, 443):
         _definition_error(errors, path, "must use the default HTTPS port 443")
+        return None
+    if not raw_host:
+        _definition_error(errors, path, "must include a host")
         return None
     if not parsed.path.startswith("/") or ".." in parsed.path.split("/"):
         _definition_error(errors, path, "must have an absolute path without '..'")
         return None
-    host = _definition_host(parsed.hostname, f"{path}.host", errors)
+    host = _definition_host(raw_host, f"{path}.host", errors)
     if not host:
         return None
     return {"url": text, "host": host, "path": parsed.path}
@@ -1447,18 +1636,19 @@ def _definition_credential(value: Any, path: str, errors: list[str]) -> Optional
             return None
         return {"source": "env", "name": name} if name else None
     if source == "hermes_provider":
-        if "name" in value:
-            _definition_error(errors, path, "hermes_provider credentials use provider + field")
-        provider = _definition_text(value.get("provider"), f"{path}.provider", errors, required=True, limit=80)
-        if provider and not _DEFINITION_SLUG_RE.fullmatch(provider):
-            _definition_error(errors, f"{path}.provider", "must be a provider slug")
-            provider = None
-        field = value.get("field")
-        if field not in {"api_key", "access_token"}:
-            _definition_error(errors, f"{path}.field", "must be api_key or access_token")
-            field = None
-        return {"source": "hermes_provider", "provider": provider, "field": field} if provider and field else None
-    _definition_error(errors, f"{path}.source", "must be env or hermes_provider")
+        # Schema v1 deliberately does not resolve provider OAuth/API credentials
+        # for declarative definitions: the public catalog contract only permits
+        # agent.secret_scope.get_secret. Existing Hermes credential reuse needs a
+        # code-owned adapter (or a future, reviewed credential broker), not a
+        # data file that can name an arbitrary provider and field.
+        _definition_error(
+            errors,
+            f"{path}.source",
+            "hermes_provider references are not supported yet; use source 'env' "
+            "(provider credentials require a code-owned adapter)",
+        )
+        return None
+    _definition_error(errors, f"{path}.source", "must be env")
     return None
 
 
@@ -1533,7 +1723,10 @@ def _definition_window(
     if kind not in _DEFINITION_WINDOW_KINDS:
         _definition_error(errors, f"{path}.kind", f"must be one of {sorted(_DEFINITION_WINDOW_KINDS)}")
         kind = "custom"
-    rolling = _definition_bool(value.get("rolling"), f"{path}.rolling", errors, default=True)
+    # Only a window explicitly declared as `rolling` is rolling by default.
+    # Daily/weekly/monthly windows are fixed periods even when the provider
+    # omits a reset time; claiming "rolling" would invent semantics.
+    rolling = _definition_bool(value.get("rolling"), f"{path}.rolling", errors, default=kind == "rolling")
     period = None
     if value.get("period_seconds") is not None:
         period = _definition_int(value.get("period_seconds"), f"{path}.period_seconds", errors, minimum=60, maximum=31_536_000)
@@ -1697,7 +1890,7 @@ def _validate_definition(
             _definition_error(errors, "request.hosts", f"must include the request host '{url['host']}'")
         headers = _definition_headers(request_raw.get("headers"), "request.headers", errors)
         if url and method == "GET":
-            request = {"url": url["url"], "host": url["host"], "method": "GET", "headers": headers}
+            request = {"url": url["url"], "host": url["host"], "path": url["path"], "method": "GET", "headers": headers}
 
     ttl = raw.get("cache_ttl_seconds", 300)
     if isinstance(ttl, bool) or not isinstance(ttl, int):
@@ -1806,7 +1999,12 @@ def _validate_definition(
         "override": override,
     }
     definition["_source"] = source
-    definition["_digest"] = _definition_digest(definition)
+    try:
+        definition["_digest"] = _definition_digest(definition)
+    except (TypeError, ValueError, RecursionError):
+        return None, errors + [
+            "definition: could not fingerprint the definition (unsupported value or excessive nesting)"
+        ], warnings
     return definition, errors, warnings
 
 
@@ -1814,6 +2012,232 @@ def _definition_digest(definition: dict[str, Any]) -> str:
     payload = {key: value for key, value in definition.items() if not key.startswith("_")}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _definition_credential_refs(definition: dict[str, Any]) -> list[dict[str, str]]:
+    """Structured, non-secret credential references in request-header order."""
+    refs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for spec in (definition.get("request") or {}).get("headers") or []:
+        ref = spec.get("credential") or {}
+        item: dict[str, str] = {}
+        if ref.get("source") == "env" and ref.get("name"):
+            item = {"source": "env", "name": str(ref["name"])}
+        elif ref.get("source") == "hermes_provider" and ref.get("provider") and ref.get("field"):
+            item = {
+                "source": "hermes_provider",
+                "provider": str(ref["provider"]),
+                "field": str(ref["field"]),
+            }
+        if not item:
+            continue
+        key = json.dumps(item, sort_keys=True, separators=(",", ":"))
+        if key not in seen:
+            seen.add(key)
+            refs.append(item)
+    return refs
+
+
+def _credential_refs_key(refs: Any) -> str:
+    return json.dumps(refs if isinstance(refs, list) else [], sort_keys=True, separators=(",", ":"))
+
+
+def _definition_credential_labels(definition: dict[str, Any]) -> list[str]:
+    return [
+        str(ref["name"]) if ref.get("source") == "env" else f"{ref.get('provider')}.{ref.get('field')}"
+        for ref in _definition_credential_refs(definition)
+    ]
+
+
+_DEFINITION_APPROVAL_LOCK = threading.Lock()
+
+
+def _load_definition_approvals(*, home: Optional[Path] = None) -> tuple[dict[str, dict[str, Any]], Optional[str]]:
+    """Read the local approval manifest. Fail closed: a corrupt manifest blocks.
+
+    Returns ``(approvals, error)``. No secret is read during approval or trust
+    evaluation; the manifest only contains the fingerprint, destination, and
+    credential *references*.
+    """
+    path = _definition_approval_path(home)
+    if not path.exists():
+        return {}, None
+    try:
+        size = path.stat().st_size
+        if size > _DEFINITION_APPROVAL_MAX_BYTES:
+            return {}, (
+                f"Approval manifest {path.name} is {size} bytes; the limit is "
+                f"{_DEFINITION_APPROVAL_MAX_BYTES} bytes. Profile definitions are blocked until it is fixed."
+            )
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        return {}, (
+            f"Approval manifest {path.name} could not be read ({type(exc).__name__}). "
+            "Profile definitions are blocked until it is fixed."
+        )
+    if not isinstance(raw, dict) or raw.get("schema") != _DEFINITION_APPROVAL_SCHEMA:
+        return {}, (
+            f"Approval manifest {path.name} is invalid (expected schema '{_DEFINITION_APPROVAL_SCHEMA}'). "
+            "Profile definitions are blocked until it is fixed."
+        )
+    raw_approvals = raw.get("approvals")
+    if not isinstance(raw_approvals, dict):
+        return {}, f"Approval manifest {path.name} is invalid ('approvals' must be an object). Profile definitions are blocked."
+    approvals: dict[str, dict[str, Any]] = {}
+    for ident, item in raw_approvals.items():
+        if not isinstance(ident, str) or not ident or not isinstance(item, dict):
+            return {}, f"Approval manifest {path.name} has an invalid entry. Profile definitions are blocked."
+        digest = item.get("digest")
+        endpoint = item.get("endpoint")
+        refs = item.get("credential_refs")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return {}, f"Approval manifest {path.name} has an invalid digest for '{ident}'. Profile definitions are blocked."
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            return {}, f"Approval manifest {path.name} has an invalid endpoint for '{ident}'. Profile definitions are blocked."
+        if not isinstance(refs, list) or not all(isinstance(ref, dict) for ref in refs):
+            return {}, f"Approval manifest {path.name} has invalid credential_refs for '{ident}'. Profile definitions are blocked."
+        approvals[ident] = {
+            "digest": digest,
+            "endpoint": endpoint.strip(),
+            "credential_refs": refs,
+            "approved_at": item.get("approved_at"),
+            "approved_by": item.get("approved_by"),
+        }
+    return approvals, None
+
+
+def _definition_trust(
+    definition: dict[str, Any],
+    *,
+    approvals: Optional[dict[str, dict[str, Any]]] = None,
+    approval_error: Optional[str] = None,
+) -> tuple[str, str]:
+    """Classify a definition as approved, untrusted, or blocked.
+
+    Bundled definitions are code-owned and reviewed with the plugin. Every
+    profile-local definition (including an ``override`` of a bundled id) must
+    match a local approval record exactly: content digest, endpoint, and the
+    structured credential references. Any change revokes the approval.
+    """
+    if definition.get("_source") == "bundled":
+        return "approved", ""
+    if approvals is None:
+        approvals, approval_error = _load_definition_approvals()
+    if approval_error:
+        return "blocked", approval_error
+    ident = str(definition.get("id") or "")
+    record = approvals.get(ident)
+    if record is None:
+        return (
+            "untrusted",
+            "This profile definition has not been approved on this machine. "
+            "Review its destination and credential references, then run scripts/approve_definition.py.",
+        )
+    if record.get("digest") != definition.get("_digest"):
+        return (
+            "blocked",
+            "The definition changed after it was approved, so its approval was revoked. "
+            "Review the new content and approve it again.",
+        )
+    endpoint = str((definition.get("request") or {}).get("url") or "")
+    if record.get("endpoint") != endpoint:
+        return "blocked", "The approval record's endpoint does not match the definition. Review and approve it again."
+    if _credential_refs_key(record.get("credential_refs")) != _credential_refs_key(
+        _definition_credential_refs(definition)
+    ):
+        return "blocked", "The approval record's credential references do not match the definition. Review and approve it again."
+    return "approved", ""
+
+
+def _definition_approval_preview(definition: dict[str, Any]) -> dict[str, Any]:
+    """Everything a human needs to approve, with no secret values and no reads."""
+    request = definition.get("request") or {}
+    refs = _definition_credential_refs(definition)
+    return {
+        "id": definition.get("id"),
+        "name": definition.get("name"),
+        "version": definition.get("version"),
+        "file": definition.get("_file") or "",
+        "endpoint": request.get("url") or "",
+        "host": request.get("host") or "",
+        "credential_refs": refs,
+        "credential_labels": _definition_credential_labels(definition),
+        "digest": definition.get("_digest") or "",
+        # Relative on purpose: catalog rows cross the REST boundary and should
+        # not leak the local user's home path. The CLI prints the absolute path.
+        "approvals_file": "provider-usage/approvals.json",
+    }
+
+
+def _definition_approval_view(definition: dict[str, Any], trust: str, reason: str = "") -> dict[str, Any]:
+    """Non-secret approval metadata for a row or catalog entry."""
+    view = _definition_approval_preview(definition)
+    view["required"] = trust != "approved"
+    view["approved"] = trust == "approved"
+    if reason:
+        view["reason"] = reason
+    return view
+
+
+def write_definition_approval(definition: dict[str, Any], *, home: Optional[Path] = None) -> dict[str, Any]:
+    """Bind this exact definition content to the local approval manifest.
+
+    This function never reads a credential. The caller (the local CLI) is
+    responsible for showing the destination and references and obtaining an
+    explicit human confirmation before calling it.
+    """
+    if definition.get("_source") == "bundled":
+        raise ValueError("bundled definitions are code-owned and do not need a local approval")
+    if not definition.get("_digest"):
+        raise ValueError("definition has no fingerprint; validate it before approving")
+    if (definition.get("request") or {}).get("path") is None:
+        raise ValueError("definition request is invalid; validate it before approving")
+    entry = {
+        "digest": str(definition["_digest"]),
+        "endpoint": str((definition.get("request") or {}).get("url") or ""),
+        "credential_refs": _definition_credential_refs(definition),
+        "approved_at": _now(),
+        "approved_by": "local-user",
+    }
+    path = _definition_approval_path(home)
+    with _DEFINITION_APPROVAL_LOCK:
+        approvals, error = _load_definition_approvals(home=home)
+        if error:
+            raise ValueError(error)
+        approvals[str(definition["id"])] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema": _DEFINITION_APPROVAL_SCHEMA, "approvals": approvals}
+        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(text, encoding="utf-8")
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass  # Windows has no POSIX mode bits; the file stays user-owned.
+        os.replace(temporary, path)
+    return entry
+
+
+def remove_definition_approval(definition_id: str, *, home: Optional[Path] = None) -> bool:
+    """Revoke one local approval. Returns True when a record was removed."""
+    path = _definition_approval_path(home)
+    with _DEFINITION_APPROVAL_LOCK:
+        approvals, error = _load_definition_approvals(home=home)
+        if error:
+            raise ValueError(error)
+        if definition_id not in approvals:
+            return False
+        approvals.pop(definition_id, None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema": _DEFINITION_APPROVAL_SCHEMA, "approvals": approvals}
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, path)
+    return True
 
 
 def _definition_file_entry(path: Path, *, source: str, allow_override: bool) -> dict[str, Any]:
@@ -1832,13 +2256,17 @@ def _definition_file_entry(path: Path, *, source: str, allow_override: bool) -> 
             entry["errors"] = [f"file: is {size} bytes; the limit is {_DEFINITION_MAX_FILE_BYTES} bytes"]
             return entry
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         entry["errors"] = [f"file: could not read JSON ({type(exc).__name__})"]
         return entry
     if isinstance(raw, dict):
         entry["id"] = str(raw.get("id") or path.stem).strip() or path.stem
         entry["name"] = str(raw.get("name") or entry["id"]).strip() or entry["id"]
-    definition, errors, warnings = _validate_definition(raw, source=source, allow_override=allow_override)
+    try:
+        definition, errors, warnings = _validate_definition(raw, source=source, allow_override=allow_override)
+    except Exception as exc:  # one pathological file must not take down the catalog
+        entry["errors"] = [f"file: validation failed unexpectedly ({type(exc).__name__})"]
+        return entry
     entry["errors"] = errors
     entry["warnings"] = warnings
     if definition:
@@ -1848,12 +2276,28 @@ def _definition_file_entry(path: Path, *, source: str, allow_override: bool) -> 
 
 
 def _definition_files(directory: Path, *, source: str, allow_override: bool) -> list[dict[str, Any]]:
-    if not directory.exists() or not directory.is_dir():
+    try:
+        if not directory.exists() or not directory.is_dir():
+            return []
+        paths = sorted(directory.glob("*.json"), key=lambda item: item.name.lower())
+    except OSError:
         return []
     entries = []
-    for path in sorted(directory.glob("*.json"), key=lambda item: item.name.lower()):
-        if path.is_file():
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
             entries.append(_definition_file_entry(path, source=source, allow_override=allow_override))
+        except Exception as exc:  # filesystem race, permissions, pathological input
+            entries.append({
+                "id": path.stem,
+                "name": path.stem.replace("-", " ").title(),
+                "file": path.name,
+                "source": source,
+                "errors": [f"file: could not be inspected ({type(exc).__name__})"],
+                "warnings": [],
+                "definition": None,
+            })
     return entries
 
 
@@ -1918,36 +2362,39 @@ def _load_provider_definitions() -> dict[str, Any]:
     }
 
 
-def _credential_value(ref: dict[str, Any]) -> Optional[str]:
+def _read_definition_secret(name: str) -> Optional[str]:
+    """Read one credential through Hermes' profile-scoped secret API.
+
+    Never falls back to ``os.environ``: that would bypass the multiplexing
+    gateway's per-profile secret scope and could read another profile's value.
+    A missing API or an unresolvable scope is treated as "no value", never as a
+    reason to widen the read.
+    """
     try:
-        if ref.get("source") == "env":
-            value = os.environ.get(str(ref.get("name") or ""))
-            return value.strip() if isinstance(value, str) and value.strip() else None
-        if ref.get("source") == "hermes_provider":
-            provider = str(ref.get("provider") or "").strip()
-            field = str(ref.get("field") or "api_key")
-            if not provider:
-                return None
-            from hermes_cli.auth import get_provider_auth_state
-
-            state = get_provider_auth_state(provider) or {}
-            value = state.get(field)
-            if not isinstance(value, str) or not value.strip():
-                tokens = state.get("tokens")
-                if isinstance(tokens, dict):
-                    value = tokens.get(field)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            if field == "api_key":
-                from hermes_cli.runtime_provider import resolve_runtime_provider
-
-                runtime = resolve_runtime_provider(requested=provider) or {}
-                value = runtime.get("api_key")
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+        from agent.secret_scope import get_secret
     except Exception:
         return None
-    return None
+    try:
+        value = get_secret(name)
+    except Exception:
+        return None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or chr(13) in value or chr(10) in value:
+        # A credential with a line break cannot be a safe header value; treat it
+        # as missing rather than letting it split the request.
+        return None
+    return value
+
+
+def _credential_value(ref: dict[str, Any]) -> Optional[str]:
+    if ref.get("source") != "env":
+        return None
+    name = str(ref.get("name") or "").strip()
+    if not name:
+        return None
+    return _read_definition_secret(name)
 
 
 def _credential_label(ref: dict[str, Any]) -> str:
@@ -1973,21 +2420,82 @@ def _definition_endpoint_host(definition: dict[str, Any]) -> str:
     return str(definition["request"].get("host") or "")
 
 
-def _assert_public_host(host: str) -> None:
+def _classify_public_address(host: str, address: str) -> str:
+    """Return a normalized public IP literal or raise a blocked error."""
+    cleaned = str(address).split("%", 1)[0]
     try:
-        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise _DefinitionError("unavailable", f"Could not resolve {host}; check the definition's host and this machine's DNS.") from exc
+        parsed = ipaddress.ip_address(cleaned)
+    except ValueError as exc:
+        raise _DefinitionError("blocked", f"{host} resolved to an invalid address; the request was refused.") from exc
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            raise _DefinitionError("blocked", f"{host} resolved to an IPv4-mapped IPv6 address; the request was refused.")
+        if any(parsed in network for network in _DEFINITION_NAT64_NETWORKS):
+            raise _DefinitionError("blocked", f"{host} resolved to a NAT64 address; the request was refused.")
+    if (
+        not parsed.is_global
+        or parsed.is_private
+        or parsed.is_loopback
+        or parsed.is_link_local
+        or parsed.is_multicast
+        or parsed.is_reserved
+        or parsed.is_unspecified
+    ):
+        raise _DefinitionError(
+            "blocked",
+            f"{host} resolves to a non-public address ({cleaned}); local/private requests are refused.",
+        )
+    return str(parsed)
+
+
+def _resolve_public_addresses(host: str) -> list[str]:
+    """Resolve once, under a hard wall-clock bound, and vet every answer.
+
+    The returned addresses are the only addresses the request may use. Mixed
+    public/private answers are refused entirely so a round-robin rebind cannot
+    pick a private peer on a second connection.
+    """
+    outcome: dict[str, Any] = {}
+
+    def _lookup() -> None:
+        try:
+            outcome["infos"] = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        except BaseException as exc:  # socket.gaierror, OSError, or a resolver bug
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_lookup, name="provider-usage-dns", daemon=True)
+    worker.start()
+    worker.join(max(0.1, float(_DEFINITION_DNS_TIMEOUT_SECS)))
+    if worker.is_alive():
+        raise _DefinitionError(
+            "unavailable",
+            f"DNS lookup for {host} did not finish within {_DEFINITION_DNS_TIMEOUT_SECS:.0f}s.",
+        )
+    error = outcome.get("error")
+    if isinstance(error, BaseException):
+        raise _DefinitionError(
+            "unavailable",
+            f"Could not resolve {host}; check the definition's host and this machine's DNS.",
+        ) from error
+    infos = outcome.get("infos") or []
     if not infos:
         raise _DefinitionError("unavailable", f"Could not resolve {host}.")
+    addresses: list[str] = []
     for info in infos:
-        address = str(info[4][0]).split("%", 1)[0]
-        try:
-            parsed = ipaddress.ip_address(address)
-        except ValueError as exc:
-            raise _DefinitionError("blocked", f"{host} resolved to an invalid address; the request was refused.") from exc
-        if not parsed.is_global:
-            raise _DefinitionError("blocked", f"{host} resolves to a non-public address ({address}); local/private requests are refused.")
+        address = _classify_public_address(host, str(info[4][0]))
+        if address not in addresses:
+            addresses.append(address)
+    if not addresses:
+        raise _DefinitionError("blocked", f"{host} did not resolve to a public address; the request was refused.")
+    return addresses[:_DEFINITION_MAX_ADDRESSES]
+
+
+def _definition_pinned_target(definition: dict[str, Any], address: str) -> str:
+    literal = f"[{address}]" if ":" in address else address
+    path = str((definition.get("request") or {}).get("path") or "/")
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"https://{literal}:443{path}"
 
 
 def _definition_request_json(
@@ -1996,24 +2504,51 @@ def _definition_request_json(
     *,
     transport: Any = None,
 ) -> Any:
+    trust, trust_reason = _definition_trust(definition)
+    if trust != "approved":
+        raise _DefinitionError("blocked" if trust == "blocked" else "requires_approval", trust_reason)
     host = _definition_endpoint_host(definition)
-    _assert_public_host(host)
+    if not host:
+        raise _DefinitionError("blocked", "The definition has no request host.")
+    deadline = time.monotonic() + float(_DEFINITION_TOTAL_TIMEOUT_SECS)
+    addresses = _resolve_public_addresses(host)
+    # Connect to the vetted address, never to a second resolution of the name.
+    # The TLS SNI name and Host header stay the definition host, so certificate
+    # verification and virtual hosting are unchanged.
+    pinned_url = _definition_pinned_target(definition, addresses[0])
     if transport is None:
         transport = _DEFINITION_TRANSPORT
+    remaining = max(0.1, deadline - time.monotonic())
+    timeout = httpx.Timeout(
+        connect=min(5.0, remaining),
+        read=min(float(_DEFINITION_TIMEOUT_SECS), remaining),
+        write=min(float(_DEFINITION_TIMEOUT_SECS), remaining),
+        pool=min(float(_DEFINITION_TIMEOUT_SECS), remaining),
+    )
+    request_headers = {
+        "accept": "application/json",
+        "user-agent": f"hermes-provider-usage/{_PLUGIN_VERSION}",
+        "Host": host,
+    }
+    request_headers.update(headers)
+    request_headers["Host"] = host  # definition headers cannot override this
     kwargs: dict[str, Any] = {
         "follow_redirects": False,
-        "trust_env": False,  # no proxy/netrc surprises; the SSRF check must describe the real peer
-        "timeout": httpx.Timeout(_DEFINITION_TIMEOUT_SECS, connect=5.0),
-        "headers": {
-            "accept": "application/json",
-            "user-agent": f"hermes-provider-usage/{_PLUGIN_VERSION}",
-        },
+        "trust_env": False,  # no proxy/netrc surprises; the pinned peer is the real peer
+        "timeout": timeout,
     }
     if transport is not None:
         kwargs["transport"] = transport
     try:
+        if time.monotonic() >= deadline:
+            raise _DefinitionError("unavailable", f"Provider request exceeded its {_DEFINITION_TOTAL_TIMEOUT_SECS:.0f}s total deadline.")
         with httpx.Client(**kwargs) as client:
-            with client.stream("GET", definition["request"]["url"], headers=headers) as response:
+            with client.stream(
+                "GET",
+                pinned_url,
+                headers=request_headers,
+                extensions={"sni_hostname": host},
+            ) as response:
                 status = response.status_code
                 if 300 <= status < 400:
                     raise _DefinitionError("unavailable", "Provider redirected the request; redirects are not followed (credentials are never forwarded).")
@@ -2032,14 +2567,26 @@ def _definition_request_json(
                 chunks: list[bytes] = []
                 total = 0
                 for chunk in response.iter_bytes():
+                    if time.monotonic() >= deadline:
+                        raise _DefinitionError(
+                            "unavailable",
+                            f"Provider response exceeded the {_DEFINITION_TOTAL_TIMEOUT_SECS:.0f}s total deadline.",
+                        )
                     total += len(chunk)
                     if total > _DEFINITION_MAX_BYTES:
                         raise _DefinitionError("unavailable", f"Provider response exceeded the {_DEFINITION_MAX_BYTES // 1024} KiB limit.")
                     chunks.append(chunk)
                 body = b"".join(chunks)
+                if time.monotonic() >= deadline:
+                    raise _DefinitionError(
+                        "unavailable",
+                        f"Provider request exceeded the {_DEFINITION_TOTAL_TIMEOUT_SECS:.0f}s total deadline.",
+                    )
     except _DefinitionError:
         raise
     except httpx.TimeoutException as exc:
+        if time.monotonic() >= deadline:
+            raise _DefinitionError("unavailable", f"Provider request exceeded the {_DEFINITION_TOTAL_TIMEOUT_SECS:.0f}s total deadline.") from exc
         raise _DefinitionError("unavailable", f"Provider request timed out after {_DEFINITION_TIMEOUT_SECS:.0f}s.") from exc
     except httpx.RequestError as exc:
         raise _DefinitionError("unavailable", "Provider request failed before a response was received.") from exc
@@ -2047,7 +2594,7 @@ def _definition_request_json(
         raise _DefinitionError("unavailable", "Provider returned an empty response.")
     try:
         payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise _DefinitionError("unavailable", "Provider returned invalid JSON.") from exc
     if not isinstance(payload, (dict, list)):
         raise _DefinitionError("unavailable", "Provider JSON must be an object or an array.")
@@ -2170,7 +2717,7 @@ def _normalize_definition_window(spec: dict[str, Any], item: Any, index: int) ->
     window: dict[str, Any] = {
         "label": label,
         "kind": spec.get("kind") or "custom",
-        "rolling": bool(spec.get("rolling", True)),
+        "rolling": bool(spec.get("rolling", spec.get("kind") == "rolling")),
         "unit": spec.get("unit") or "percent",
         "used_percent": round(used_percent, 2) if used_percent is not None else None,
         "remaining_percent": round(remaining_percent, 2) if remaining_percent is not None else None,
@@ -2190,6 +2737,10 @@ def _normalize_definition_window(spec: dict[str, Any], item: Any, index: int) ->
         currency = _definition_scalar(currency, item)
     if currency:
         window["currency"] = str(currency).upper()
+    elif (spec.get("unit") or "") in {"usd", "credits"}:
+        # The definition declared money/credits but the dynamic currency path
+        # did not resolve. Report that honestly instead of implying USD.
+        window["currency"] = "UNKNOWN"
     if used is not None:
         window["used"] = used
     if limit is not None:
@@ -2213,39 +2764,56 @@ def _definition_mapping_windows(mapping: dict[str, Any], payload: Any) -> tuple[
         window = _normalize_definition_window(spec, payload, index)
         if window:
             windows.append(window)
+        else:
+            label = str((spec or {}).get("label") or f"window {index + 1}")
+            warnings.append(f"Window '{label}' had no mapped values and was omitted.")
     source = mapping.get("windows_from")
     if source:
         items = _path_get(payload, source["path"])
         if isinstance(items, list):
+            dropped = 0
             for index, item in enumerate(items[:50]):
                 window = _normalize_definition_window(source["spec"], item, index)
                 if window:
                     windows.append(window)
+                else:
+                    dropped += 1
+            if dropped:
+                warnings.append(f"{dropped} of {min(len(items), 50)} mapped windows had no usable values and were omitted.")
             if len(items) > 50:
                 warnings.append("Only the first 50 windows are shown.")
-        elif items is not None:
+        elif items is None:
+            warnings.append(f"Mapping path '{source['path']}' was not found, so no windows were read.")
+        else:
             warnings.append(f"Mapping path '{source['path']}' is not an array, so no windows were read.")
     return windows, warnings
 
 
-def _definition_balances(mapping: dict[str, Any], payload: Any) -> list[dict[str, Any]]:
+def _definition_balances(mapping: dict[str, Any], payload: Any) -> tuple[list[dict[str, Any]], list[str]]:
     balances: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for spec in mapping.get("balances") or []:
         amount = _definition_scalar(spec.get("amount"), payload, numeric=True)
         if amount is None:
+            label = str((spec or {}).get("label") or "balance")
+            warnings.append(f"Balance '{label}' had no mapped amount and was omitted.")
             continue
         currency = spec.get("currency")
         if isinstance(currency, dict):
             currency = _definition_scalar(currency, payload)
+        resolved_currency = str(currency or "").strip().upper()
+        if not resolved_currency:
+            # Never guess USD: an unresolved currency is explicitly unknown.
+            resolved_currency = "UNKNOWN"
         balances.append({
             "label": spec["label"],
             "amount": amount,
-            "currency": str(currency or "USD").upper(),
+            "currency": resolved_currency,
             "unit": spec.get("unit") or "currency",
             "kind": spec.get("kind") or "credit",
             "detail": _definition_scalar(spec.get("detail"), payload),
         })
-    return balances
+    return balances, warnings
 
 
 def _definition_details(mapping: dict[str, Any], payload: Any) -> list[str]:
@@ -2288,8 +2856,11 @@ def _definition_provenance(
         "checked_at": _now(),
         "cache": cache,
         "ttl_seconds": ttl,
-        "scope": profile or "active",
+        "scope": _hermes_home_scope(),
+        "scope_kind": "hermes_home",
+        "profile": profile or None,
         "overrides": definition.get("_overrides"),
+        "approval": definition.get("_approval"),
     }
 
 
@@ -2311,17 +2882,19 @@ def _normalize_definition_row(
     row["definition_id"] = definition["id"]
     row["definition_version"] = definition["version"]
     row["definition_source"] = definition.get("_source") or "profile"
-    row["scope"] = profile or "active"
+    row["scope"] = _hermes_home_scope()
+    row["trust"] = "approved"
     row["state"] = "ok"
     row["provenance"] = _definition_provenance(
         definition, fetched_at=fetched_at, cache=cache, ttl=definition["cache_ttl_seconds"], profile=profile
     )
     windows, mapping_warnings = _definition_mapping_windows(mapping, payload)
-    balances = _definition_balances(mapping, payload)
+    balances, balance_warnings = _definition_balances(mapping, payload)
     details = _definition_details(mapping, payload)
     if definition.get("scope_note"):
         details.append(str(definition["scope_note"]))
     details.extend(mapping_warnings)
+    details.extend(balance_warnings)
     details.extend(warnings or [])
     if windows:
         row["limits"] = [{"id": "default", "label": title, "windows": windows}]
@@ -2353,6 +2926,8 @@ def _unavailable_definition_row(
     state: str,
     reason: str,
     profile: Optional[str],
+    trust: Optional[str] = None,
+    approval: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     row = _base(definition["id"], title=definition["name"], source="declarative", plan=None)
     row["label"] = definition["name"]
@@ -2360,11 +2935,15 @@ def _unavailable_definition_row(
     row["definition_id"] = definition["id"]
     row["definition_version"] = definition["version"]
     row["definition_source"] = definition.get("_source") or "profile"
-    row["scope"] = profile or "active"
+    row["scope"] = _hermes_home_scope()
     row["state"] = state
     row["available"] = False
     row["capability"] = "usage" if definition["mapping"].get("windows") or definition["mapping"].get("windows_from") else "balance"
     row["unavailable_reason"] = reason
+    if trust:
+        row["trust"] = trust
+    if approval:
+        row["approval"] = approval
     row["provenance"] = _definition_provenance(
         definition, fetched_at=None, cache="none", ttl=definition["cache_ttl_seconds"], profile=profile
     )
@@ -2382,7 +2961,13 @@ def _definition_cache_key(definition: dict[str, Any], profile: Optional[str], he
     credential_shape = hashlib.sha256(
         json.dumps(headers, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    return f"{str(profile or 'active').strip() or 'active'}|{definition['id']}|{definition.get('_digest') or ''}|{credential_shape}"
+    # Scope the cache to the effective canonical home, never to the display
+    # word "active": a named profile can share a name across homes, and the
+    # default profile is still a concrete home.
+    return (
+        f"{_hermes_home_scope()}|{profile or ''}|{definition['id']}|"
+        f"{definition.get('_digest') or ''}|{credential_shape}"
+    )
 
 
 def _fetch_declarative(
@@ -2409,6 +2994,16 @@ def _fetch_declarative_cached(
     headers: Optional[dict[str, str]] = None,
     transport: Any = None,
 ) -> dict[str, Any]:
+    trust, trust_reason = _definition_trust(definition)
+    if trust != "approved":
+        return _unavailable_definition_row(
+            definition,
+            state="requires_approval" if trust == "untrusted" else "blocked",
+            reason=trust_reason,
+            profile=profile,
+            trust=trust,
+            approval=_definition_approval_view(definition, trust, trust_reason),
+        )
     if headers is None:
         headers, missing = _resolve_definition_headers(definition)
         if missing:
@@ -2418,9 +3013,11 @@ def _fetch_declarative_cached(
                 reason=(
                     "Not connected: provide "
                     + ", ".join(missing)
-                    + " in the Hermes environment, then refresh. Credentials never appear in this pane."
+                    + " through the profile's Hermes secret scope, then refresh. Credentials never appear in this pane."
                 ),
                 profile=profile,
+                trust=trust,
+                approval=_definition_approval_view(definition, trust),
             )
     key = _definition_cache_key(definition, profile, headers)
     ttl = int(definition.get("cache_ttl_seconds") or 300)
@@ -2442,7 +3039,9 @@ def _fetch_declarative_cached(
     try:
         row = _fetch_declarative(definition, profile=profile, headers=headers, transport=transport)
     except _DefinitionError as exc:
-        if entry:
+        # A security block is never softened into "stale": an approval can be
+        # revoked or a destination can start resolving privately between runs.
+        if entry and exc.state not in {"blocked", "requires_approval"}:
             row = copy.deepcopy(entry["row"])
             row["state"] = "stale"
             row["provenance"]["cache"] = "stale"
@@ -2456,7 +3055,14 @@ def _fetch_declarative_cached(
                 "ttl_seconds": ttl,
             }
             return row
-        return _unavailable_definition_row(definition, state=exc.state, reason=exc.message, profile=profile)
+        return _unavailable_definition_row(
+            definition,
+            state=exc.state,
+            reason=exc.message,
+            profile=profile,
+            trust="approved",
+            approval=_definition_approval_view(definition, "approved"),
+        )
     with _DEFINITION_CACHE_LOCK:
         _DEFINITION_CACHE[key] = {"at": now_mono, "row": copy.deepcopy(row)}
         if len(_DEFINITION_CACHE) > 128:
@@ -2466,19 +3072,15 @@ def _fetch_declarative_cached(
     return row
 
 
-def _definition_ready(definition: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
-    headers, missing = _resolve_definition_headers(definition)
-    return headers, missing
-
-
 def _definition_catalog_entry(
     entry: dict[str, Any],
     *,
     row: Optional[dict[str, Any]],
-    missing: list[str],
+    prepared_item: Optional[dict[str, Any]],
     profile: Optional[str],
 ) -> dict[str, Any]:
     definition = entry.get("definition")
+    prepared_item = prepared_item or {}
     if not definition:
         return {
             "id": entry.get("id") or "unknown",
@@ -2486,14 +3088,26 @@ def _definition_catalog_entry(
             "source": entry.get("source") or "profile",
             "file": entry.get("file") or "",
             "state": "invalid",
+            "trust": "blocked",
+            "approval_required": False,
             "errors": list(entry.get("errors") or [])[:8],
             "warnings": list(entry.get("warnings") or [])[:8],
         }
-    state = "available" if missing else "ready"
-    if row:
+    missing = list(prepared_item.get("missing") or [])
+    trust = str(prepared_item.get("trust") or ("approved" if definition.get("_source") == "bundled" else "untrusted"))
+    reason = str(prepared_item.get("reason") or "")
+    if trust == "untrusted":
+        state = "requires_approval"
+    elif trust == "blocked":
+        state = "blocked"
+    elif row:
         state = str(row.get("state") or "connected")
         if state == "ok":
             state = "connected"
+    else:
+        state = "available" if missing else "ready"
+    approval = _definition_approval_view(definition, trust, reason)
+    refs = _definition_credential_refs(definition)
     return {
         "id": definition["id"],
         "name": definition["name"],
@@ -2506,18 +3120,25 @@ def _definition_catalog_entry(
         "stability": definition.get("stability") or "experimental",
         "scope_note": definition.get("scope_note") or definition["mapping"].get("scope_note"),
         "state": state,
+        "trust": trust,
+        "approval_required": trust != "approved",
+        "approval": approval,
+        "credential_refs": refs,
+        "credential_labels": _definition_credential_labels(definition),
         "missing_credentials": missing,
         "setup": {
             "file": f"{definition['id']}.json",
             "env": missing,
             "directory": "$HERMES_HOME/provider-usage/providers",
             "validate": "POST /api/plugins/provider-usage/definitions/validate",
+            "approve": "python scripts/approve_definition.py <definition.json>",
         },
         "overrides": entry.get("overrides"),
         "errors": list(entry.get("errors") or [])[:8],
         "warnings": list(entry.get("warnings") or [])[:8],
-        "last_error": (row or {}).get("unavailable_reason"),
-        "scope": profile or "default",
+        "last_error": reason or (row or {}).get("unavailable_reason"),
+        "scope": _hermes_home_scope(),
+        "profile": profile or "default",
     }
 
 
@@ -2535,13 +3156,23 @@ def _definition_catalog(
             _definition_catalog_entry(
                 entry,
                 row=rows.get(ident),
-                missing=list(prepared_item.get("missing") or []),
+                prepared_item=prepared_item,
                 profile=profile,
             )
         )
     for entry in loaded["invalid"]:
-        entries.append(_definition_catalog_entry(entry, row=None, missing=[], profile=profile))
-    order = {"connected": 0, "available": 1, "unverified": 2, "stale": 2, "needs_permission": 3, "unavailable": 4, "invalid": 5}
+        entries.append(_definition_catalog_entry(entry, row=None, prepared_item=None, profile=profile))
+    order = {
+        "connected": 0,
+        "available": 1,
+        "unverified": 2,
+        "stale": 2,
+        "requires_approval": 3,
+        "needs_permission": 4,
+        "blocked": 5,
+        "unavailable": 6,
+        "invalid": 7,
+    }
     entries.sort(key=lambda item: (order.get(str(item.get("state")), 9), str(item.get("name") or "").lower()))
     counts: dict[str, int] = {}
     for item in entries:
@@ -2550,7 +3181,10 @@ def _definition_catalog(
     return {
         "version": 1,
         "profile": profile or "default",
+        "scope": _hermes_home_scope(),
+        "scope_kind": "hermes_home",
         "directory": "$HERMES_HOME/provider-usage/providers",
+        "approvals_file": "approvals.json (outside the definitions directory)",
         "definitions": entries,
         "counts": counts,
         "bundled_count": loaded.get("bundled_count", 0),
@@ -2578,14 +3212,30 @@ def _definition_inventory(
 
 
 def _prepare_definitions(loaded: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Resolve readiness without touching credentials for untrusted definitions.
+
+    Bundled definitions are code-owned. Profile-local definitions must match the
+    approval manifest before their header references are resolved; an untrusted
+    or blocked definition exposes only its destination and reference names.
+    """
+    approvals, approval_error = _load_definition_approvals()
     prepared: dict[str, dict[str, Any]] = {}
     for ident, entry in loaded["valid"].items():
         definition = entry["definition"]
-        headers, missing = _resolve_definition_headers(definition)
-        if missing:
-            prepared[ident] = {"definition": definition, "headers": {}, "missing": missing}
-        else:
-            prepared[ident] = {"definition": definition, "headers": headers, "missing": []}
+        trust, reason = _definition_trust(definition, approvals=approvals, approval_error=approval_error)
+        definition["_approval"] = _definition_approval_preview(definition)
+        item: dict[str, Any] = {
+            "definition": definition,
+            "trust": trust,
+            "reason": reason,
+            "headers": {},
+            "missing": [],
+        }
+        if trust == "approved":
+            headers, missing = _resolve_definition_headers(definition)
+            item["headers"] = headers
+            item["missing"] = missing
+        prepared[ident] = item
     return prepared
 
 
@@ -2609,6 +3259,13 @@ def definitions_validate(payload: Optional[dict[str, Any]] = Body(default=None))
             raw = json.loads(body["json"])
         except json.JSONDecodeError as exc:
             return {"ok": False, "errors": [f"json: {exc.msg} at line {exc.lineno}"], "warnings": [], "summary": None}
+        except RecursionError:
+            return {
+                "ok": False,
+                "errors": ["json: nesting is too deep to validate safely"],
+                "warnings": [],
+                "summary": None,
+            }
     definition, errors, warnings = _validate_definition(raw, source="profile", allow_override=True)
     summary = None
     if definition:
@@ -2621,12 +3278,20 @@ def definitions_validate(payload: Optional[dict[str, Any]] = Body(default=None))
             "windows": len(definition["mapping"]["windows"]) + (1 if definition["mapping"]["windows_from"] else 0),
             "balances": len(definition["mapping"]["balances"]),
             "details": len(definition["mapping"]["details"]),
-            "credential_refs": [
-                _credential_label(spec["credential"])
-                for spec in definition["request"]["headers"]
-            ],
+            "credential_refs": _definition_credential_refs(definition),
+            "credential_labels": _definition_credential_labels(definition),
+            "requires_approval": definition.get("_source") != "bundled",
         }
     return {"ok": bool(definition), "errors": errors, "warnings": warnings, "summary": summary}
+
+
+def _fetch_anthropic() -> dict[str, Any]:
+    # Read-only: core's read-only variant never refreshes the Claude Code grant
+    # just to read its usage windows.
+    snapshot = _core_usage("anthropic")
+    if snapshot is None:
+        return _provider_unavailable("anthropic")
+    return _serialize_snapshot(snapshot)
 
 
 def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -2649,12 +3314,7 @@ def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = Non
     if provider == "nous":
         return _fetch_nous()
     if provider == "anthropic":
-        from agent.account_usage import fetch_account_usage
-
-        snapshot = fetch_account_usage("anthropic")
-        if snapshot is None:
-            raise RuntimeError("Anthropic usage is unavailable for this account")
-        return _serialize_snapshot(snapshot)
+        return _fetch_anthropic()
     return _unavailable(provider, "No usage or balance endpoint is known for this provider.")
 
 
@@ -2692,37 +3352,197 @@ def _config_provider_values(value: Any, found: list[str]) -> None:
 
 
 def _has_local_credentials(provider: str) -> bool:
+    """Presence only, from core's non-secret summary (never a credential store)."""
+    return bool(_credential_summary(provider).get("configured"))
+
+
+# ---------------------------------------------------------------------------
+# Per-account usage (overview `accounts[]`)
+#
+# The running-agents footer may attach a provider's shared pool to a child only
+# when the row names exactly one account identity equal to the child's. Core's
+# pooled-credential namespace is the only trusted source for that id; the plugin
+# never reads the pool itself. Metadata is cheap, so it is listed each overview;
+# per-account usage is a network read, so it is TTL-cached, deduped by identity
+# and bounded per provider. A missing identity stops there - it is never retried
+# as a provider-wide read, which could borrow another login's pool.
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_USAGE_TTL_SECS = 60.0
+_ACCOUNT_USAGE_MAX_ENTRIES = 32
+_ACCOUNT_USAGE_MAX_ACCOUNTS = 8
+_ACCOUNT_USAGE_ENRICH_LIMIT = 4
+_ACCOUNT_METADATA_KEYS = (
+    "credential_id", "account_id", "label", "auth_type", "source", "available",
+    "status", "request_count", "last_status_at",
+)
+_ACCOUNT_ROW_KEYS = (
+    "id", "capability", "plan", "source", "fetched_at", "available", "limits",
+    "balances", "details", "key_usage", "activity", "credit_status",
+    "reset_credits", "products", "spend_control", "model_access",
+)
+# Providers with a real core read-only fetcher. xAI is brokered by this plugin
+# and Nous credits are account-global, so neither gets a per-identity fetch.
+_ACCOUNT_USAGE_PROVIDERS = frozenset({
+    "openai-codex", "anthropic", "openrouter", "deepseek", "ollama-cloud",
+    "opencode-zen", "opencode-go",
+})
+_ACCOUNT_GLOBAL_PROVIDERS = frozenset({"nous"})
+_ACCOUNT_USAGE_CACHE: dict[tuple[str, str, str], tuple[float, Optional[dict[str, Any]]]] = {}
+_ACCOUNT_USAGE_LOCKS: dict[tuple[str, str, str], threading.Lock] = {}
+_ACCOUNT_USAGE_LOCK = threading.Lock()
+
+
+def _account_identities(provider: str) -> list[dict[str, Any]]:
+    """Non-secret pooled accounts for *provider*, deduped by core identity id."""
+    if not _core_seam_available():
+        return []
     try:
-        if provider in {"openai-codex", "xai-oauth"}:
-            from agent.credential_pool import load_pool
+        from agent.account_usage import list_account_usage_identities
 
-            pool = load_pool(provider)
-            if pool and pool.has_credentials():
-                return True
-        from hermes_cli.auth import get_provider_auth_state
-
-        state = get_provider_auth_state(provider) or {}
-        for key in ("access_token", "api_key", "refresh_token", "tokens"):
-            value = state.get(key)
-            if isinstance(value, str) and value.strip():
-                return True
-            if isinstance(value, dict) and any(str(item or "").strip() for item in value.values()):
-                return True
-        # Credentials can also arrive from environment/config alone, with no
-        # auth entry — e.g. Ollama Cloud's OLLAMA_API_KEY. A resolvable runtime
-        # key counts as local credentials for inventory purposes.
-        try:
-            from hermes_cli.runtime_provider import resolve_runtime_provider
-
-            runtime = resolve_runtime_provider(requested=provider) or {}
-            resolved = str(runtime.get("provider") or "").strip()
-            if resolved and resolved != "custom" and str(runtime.get("api_key") or "").strip():
-                return True
-        except Exception:
-            pass
+        rows = list_account_usage_identities(provider) or []
     except Exception:
-        return False
-    return False
+        log.debug("provider-usage account identities unavailable for %s", provider, exc_info=True)
+        return []
+    accounts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+        identity_id = str(entry.get("identity_id") or "").strip()
+        if not identity_id or identity_id in seen:
+            continue
+        seen.add(identity_id)
+        account = {
+            key: copy.deepcopy(entry[key])
+            for key in _ACCOUNT_METADATA_KEYS
+            if entry.get(key) is not None
+        }
+        account["identity_id"] = identity_id
+        account["label"] = str(entry.get("label") or identity_id)
+        accounts.append(account)
+        if len(accounts) >= _ACCOUNT_USAGE_MAX_ACCOUNTS:
+            break
+    return accounts
+
+
+def _clear_account_caches() -> None:
+    """Test seam: drop cached per-account snapshots and their per-key locks."""
+    with _ACCOUNT_USAGE_LOCK:
+        _ACCOUNT_USAGE_CACHE.clear()
+        _ACCOUNT_USAGE_LOCKS.clear()
+
+
+def _account_usage_row(provider: str, identity_id: str) -> Optional[dict[str, Any]]:
+    """One exact account's normalized usage, or ``None`` (never a fallback read)."""
+    wanted = str(identity_id or "").strip()
+    if not wanted:
+        return None
+    key = (provider, wanted, _hermes_home_scope())
+    now = time.monotonic()
+    with _ACCOUNT_USAGE_LOCK:
+        cached = _ACCOUNT_USAGE_CACHE.get(key)
+        if cached is not None and now - cached[0] < _ACCOUNT_USAGE_TTL_SECS:
+            return copy.deepcopy(cached[1])
+        lock = _ACCOUNT_USAGE_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        with _ACCOUNT_USAGE_LOCK:
+            cached = _ACCOUNT_USAGE_CACHE.get(key)
+            if cached is not None and now - cached[0] < _ACCOUNT_USAGE_TTL_SECS:
+                return copy.deepcopy(cached[1])
+        snapshot = _core_usage(provider, identity_id=wanted)
+        row = _serialize_snapshot(snapshot) if snapshot is not None else None
+        with _ACCOUNT_USAGE_LOCK:
+            _ACCOUNT_USAGE_CACHE[key] = (time.monotonic(), row)
+            if len(_ACCOUNT_USAGE_CACHE) > _ACCOUNT_USAGE_MAX_ENTRIES:
+                oldest = min(_ACCOUNT_USAGE_CACHE, key=lambda item: _ACCOUNT_USAGE_CACHE[item][0])
+                _ACCOUNT_USAGE_CACHE.pop(oldest, None)
+        return copy.deepcopy(row)
+
+
+def _account_row_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalized usage fields an account entry carries (footer/pane consumers)."""
+    return {
+        key: copy.deepcopy(row[key])
+        for key in _ACCOUNT_ROW_KEYS
+        if key in row and row[key] is not None
+    }
+
+
+def _verified_row_identity(row: dict[str, Any]) -> str:
+    """The account id a usage snapshot proved it was fetched for, else ``""``.
+
+    Core stamps ``identity_id``/``account_id`` only on a per-identity read; a
+    provider-wide (env/singleton) snapshot stays unset rather than guessing.
+    """
+    for key in ("identity_id", "account_id"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _attach_accounts(provider: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Attach known account identities, and per-account usage where provable.
+
+    A provider-wide row is reused for a single pool account only when its
+    snapshot proved that exact identity. An unverified (env/singleton) fetch is
+    not evidence of the sole pool account: supported providers get an exact
+    per-identity read instead, and providers without one (xAI, Nous credits)
+    stay unknown. With two or more logins a provider-wide figure is ambiguous:
+    entries carry only their own identity-scoped snapshot, and the flat row
+    identity stays unset.
+    """
+    accounts = _account_identities(provider)
+    if not accounts:
+        return row
+    single = len(accounts) == 1
+    source_identity = _verified_row_identity(row)
+    exact_fetch_supported = (
+        provider in _ACCOUNT_USAGE_PROVIDERS
+        and provider not in _ACCOUNT_GLOBAL_PROVIDERS
+    )
+    entries: list[dict[str, Any]] = []
+    for index, account in enumerate(accounts):
+        entry = dict(account)
+        identity_id = str(account.get("identity_id") or "").strip()
+        if single:
+            if identity_id and source_identity and source_identity == identity_id:
+                # The provider-wide snapshot was fetched with this exact credential,
+                # so its figures are this account's; reuse them without another read.
+                entry.update(_account_row_fields(row))
+                row["identity_id"] = identity_id
+                row["account_label"] = str(account.get("label") or identity_id)
+            elif identity_id and exact_fetch_supported:
+                # Never stamp the provider-wide row with a pool account the fetch did
+                # not prove. Read the account's own snapshot instead of copying.
+                try:
+                    usage = _account_usage_row(provider, identity_id)
+                except Exception:
+                    log.debug("provider-usage account read failed for %s", provider, exc_info=True)
+                    usage = None
+                usage_identity = _verified_row_identity(usage) if usage else ""
+                if usage and (not usage_identity or usage_identity == identity_id):
+                    entry.update(_account_row_fields(usage))
+            # No exact fetch (xAI is brokered provider-wide; Nous credits are
+            # account-global): the entry stays unknown rather than borrowing a
+            # figure from an unproven credential.
+        elif (
+            provider in _ACCOUNT_USAGE_PROVIDERS
+            and provider not in _ACCOUNT_GLOBAL_PROVIDERS
+            and index < _ACCOUNT_USAGE_ENRICH_LIMIT
+        ):
+            try:
+                usage = _account_usage_row(provider, str(account["identity_id"]))
+            except Exception:
+                log.debug("provider-usage account read failed for %s", provider, exc_info=True)
+                usage = None
+            usage_identity = _verified_row_identity(usage) if usage else ""
+            if usage and (not usage_identity or usage_identity == str(account["identity_id"])):
+                entry.update(_account_row_fields(usage))
+        entries.append(entry)
+    row["accounts"] = entries
+    return row
 
 
 def _inventory() -> list[dict[str, Any]]:
@@ -3415,7 +4235,13 @@ def _fetch_inventory_provider(
             profile=profile,
             headers=item.get("headers") or {},
         )
-    return _fetch_provider(provider)
+    row = _fetch_provider(provider)
+    if provider in _SUPPORTED:
+        # Kept inside the provider worker so the overview's existing thread pool
+        # bounds account enrichment too (no second fan-out, no per-poll storm;
+        # account reads are TTL-cached by identity).
+        row = _attach_accounts(provider, row)
+    return row
 
 
 def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, Any]:
@@ -3427,7 +4253,13 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
         _maybe_refresh_vendor_specs()
     loaded = _load_provider_definitions()
     prepared = _prepare_definitions(loaded)
-    ready = {ident: item for ident, item in prepared.items() if not item.get("missing")}
+    # Network and credential use require an approved definition. Untrusted or
+    # blocked rows remain visible in the catalog, never as live providers.
+    ready = {
+        ident: item
+        for ident, item in prepared.items()
+        if item.get("trust") == "approved" and not item.get("missing")
+    }
     requested_provider = _canonical(body.get("active_provider")) if body.get("active_provider") else ""
     active_model = str(body.get("active_model") or "").strip()
     inventory = _inventory()

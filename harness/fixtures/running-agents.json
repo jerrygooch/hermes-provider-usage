@@ -1,0 +1,264 @@
+{
+  "version": 1,
+  "fetched_at": "2026-09-13T12:00:00Z",
+  "active": {
+    "provider": "openai-codex",
+    "model": "gpt-5.6-codex"
+  },
+  "default_provider": "openai-codex",
+  "providers": [
+    {
+      "id": "openai-codex",
+      "label": "OpenAI Codex",
+      "available": true,
+      "plan": "Pro",
+      "capability": "usage",
+      "accounts": [
+        {
+          "identity_id": "codex:synthetic-account:synthetic-subject",
+          "account_id": "codex:synthetic-account:synthetic-subject",
+          "credential_id": "cred-synthetic-codex",
+          "profile_scope": "home:0123456789abcdef",
+          "label": "Synthetic Codex",
+          "auth_type": "oauth",
+          "source": "pool",
+          "available": true,
+          "status": "ok",
+          "request_count": 0,
+          "last_status_at": null
+        }
+      ],
+      "limits": [
+        {
+          "id": "default",
+          "label": "Codex",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remaining_percent": 62,
+              "reset_at": "2026-09-13T18:30:00Z"
+            },
+            {
+              "label": "Weekly",
+              "remaining_percent": 84,
+              "reset_at": "2026-09-16T17:00:00Z"
+            }
+          ]
+        }
+      ],
+      "balances": [
+        {
+          "label": "Extra usage balance",
+          "amount": 12.34,
+          "currency": "USD"
+        }
+      ],
+      "details": []
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "available": true,
+      "plan": "API credits",
+      "capability": "balance",
+      "accounts": [
+        {
+          "identity_id": "fp:2222222222222222",
+          "account_id": null,
+          "credential_id": "cred-synthetic-deepseek",
+          "profile_scope": "home:0123456789abcdef",
+          "label": "DeepSeek main",
+          "auth_type": "api_key",
+          "source": "pool",
+          "available": true,
+          "status": "ok",
+          "request_count": 3,
+          "last_status_at": null
+        }
+      ],
+      "limits": [],
+      "balances": [
+        {
+          "label": "Total balance",
+          "amount": 8.72,
+          "currency": "USD",
+          "granted": 10,
+          "used": 1.28,
+          "total": 10
+        }
+      ],
+      "details": []
+    },
+    {
+      "id": "opencode-go",
+      "label": "OpenCode",
+      "available": true,
+      "plan": "Go subscription",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "go",
+          "label": "Go subscription",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remaining_percent": 92
+            },
+            {
+              "label": "Weekly",
+              "remaining_percent": 74
+            },
+            {
+              "label": "Monthly",
+              "remaining_percent": 63
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "products": [
+        {
+          "id": "go",
+          "label": "Go subscription",
+          "kind": "subscription",
+          "available": true
+        }
+      ],
+      "details": []
+    },
+    {
+      "id": "opencode-zen",
+      "label": "OpenCode",
+      "available": true,
+      "plan": "Zen API credits",
+      "capability": "balance",
+      "limits": [],
+      "balances": [],
+      "products": [
+        {
+          "id": "zen",
+          "label": "Zen API credits",
+          "kind": "balance",
+          "available": false,
+          "unavailable_reason": "Wallet balance is not exposed to API keys."
+        }
+      ],
+      "details": [
+        "API access authenticated; balance unavailable"
+      ]
+    },
+    {
+      "id": "ollama-cloud",
+      "label": "Ollama Cloud",
+      "available": true,
+      "plan": null,
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "Ollama Cloud",
+          "windows": [
+            {
+              "label": "Monthly",
+              "remaining_percent": 72
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": [
+        "qwen3-coder:480b: 18 requests",
+        "Spend in the last 4 weeks: $1.84"
+      ]
+    },
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "usage",
+      "accounts": [
+        {
+          "identity_id": "fp:1111111111111111",
+          "account_id": null,
+          "credential_id": "cred-synthetic-xai",
+          "profile_scope": "home:0123456789abcdef",
+          "label": "Work Grok",
+          "auth_type": "oauth",
+          "source": "pool",
+          "available": true,
+          "status": "ok",
+          "request_count": 1,
+          "last_status_at": null
+        }
+      ],
+      "limits": [
+        {
+          "id": "default",
+          "label": "SuperGrok",
+          "windows": [
+            {
+              "label": "Subscription window",
+              "remaining_percent": 58,
+              "reset_at": "2026-09-14T18:00:00Z"
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": []
+    },
+    {
+      "id": "nous",
+      "label": "Nous Portal",
+      "available": false,
+      "unavailable_reason": "No Portal OAuth session on this profile."
+    }
+  ],
+  "subagents": {
+    "sess-harness-1": {
+      "subagents": [
+        {
+          "subagent_id": "sa-harness-1",
+          "parent_id": null,
+          "depth": 1,
+          "goal": "Audit the popover layout at 420px",
+          "model": "gpt-5.6-codex",
+          "provider": "openai-codex",
+          "provider_account_id": "codex:synthetic-account:synthetic-subject",
+          "status": "running",
+          "started_at": 1762790400,
+          "tool_count": 4,
+          "last_tool": "read_file"
+        },
+        {
+          "subagent_id": "sa-harness-2",
+          "parent_id": null,
+          "depth": 1,
+          "goal": "Collect the provider payloads",
+          "model": "gpt-5.6-codex",
+          "provider": "openai-codex",
+          "provider_account_id": "fp:9999999999999999",
+          "status": "running",
+          "started_at": 1762790405,
+          "tool_count": 2,
+          "last_tool": "web_extract"
+        },
+        {
+          "subagent_id": "sa-harness-3",
+          "parent_id": null,
+          "depth": 1,
+          "goal": "Summarize the provider docs",
+          "model": "deepseek/deepseek-chat",
+          "provider": "deepseek",
+          "provider_account_id": "fp:2222222222222222",
+          "status": "running",
+          "started_at": 1762790410,
+          "tool_count": 1,
+          "last_tool": "read_file"
+        }
+      ],
+      "delegations": []
+    }
+  }
+}

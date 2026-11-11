@@ -117,6 +117,8 @@ door over CDP:
 |---|---|
 | `compact-5h-wk` | subscription with **5-hour + 7-day** windows → compact funding `5h 62% · wk 84%`, two meter bars |
 | `credit-balance` | **credit-balance** provider → prominent `$43.50`, `used/granted` break-down, `CreditCard` chip icon |
+| `declarative-catalog` | declarative GitHub **read-only rate limit** plus available definitions and an invalid mapping |
+| `declarative-honesty` | approval-required, blocked, and unknown definition states; unknown currency; malformed mapping warning |
 | `exhausted-monthly` | subscription with a **0% monthly window** → red destructive `mo 0%`, alongside a live 5-hour window |
 | `preview-showcase` | the public README previews: Codex (Pro) active with DeepSeek, OpenCode, SuperGrok, and Ollama Cloud reporting, plus one limited provider |
 
@@ -151,6 +153,23 @@ python harness/export-previews.py
 mix knobs, `.dark` class) against the real preset palettes, and the stylesheet
 derives every `--ui-*` / `--dt-*` token the same way the running app does. The
 committed previews use the desktop's default theme, **nous**, in dark mode.
+
+### Running-agents footer probe
+
+`harness/fixtures/running-agents.json` exists only for the popover probe: it
+adds a `subagents` map served to the plugin's `subagent.list` read. The probe
+asserts the footer's presence, its 10.5px row type (below the 13px provider
+title) and its width inside the 356px popover, then captures
+`shots/popover-running-agents_w<width>.png`:
+
+```bash
+node harness/build.mjs
+node harness/popover-verify.mjs --fixture running-agents --theme nous --mode dark
+```
+
+A fixture without a `subagents` map (e.g. `compact-5h-wk`) must render **no**
+footer; the probe asserts that too. `capture.mjs` skips this fixture because it
+adds nothing to the page surface.
 
 `harness/dist/app.js`, `harness/dist/*.html`, and `harness/dist/shots/*` are
 git-ignored build/capture outputs — regenerate, don't commit them.

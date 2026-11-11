@@ -50,10 +50,15 @@ function arg(name, fallback) {
 }
 
 const fixturesDir = path.join(__dirname, 'fixtures')
+// `running-agents` exists only for the popover probe (harness/popover-verify.mjs
+// --fixture running-agents); it never adds footer content to the page, so
+// capturing it as a pane fixture would just duplicate preview-showcase.
+const POPOVER_ONLY_FIXTURES = new Set(['running-agents'])
 const fixtures = fs
   .readdirSync(fixturesDir)
   .filter(f => f.endsWith('.json'))
   .map(f => f.replace(/\.json$/, ''))
+  .filter(f => !POPOVER_ONLY_FIXTURES.has(f))
 
 const requestedFixture = arg('--fixture', '')
 const requestedWidth = arg('--width', '')
@@ -167,7 +172,7 @@ try {
         paneRect: await cdp.eval('window.__CAPTURE__["pane-root-rect"]'),
         chipRect: await cdp.eval('window.__CAPTURE__["chip-root-rect"]'),
         geometry: await cdp.eval('window.__GEOMETRY__'),
-        text: await cdp.eval('(document.getElementById("pane-root")||document.body).innerText.slice(0, 2000)')
+        text: await cdp.eval('(document.getElementById("pane-root")||document.body).innerText.slice(0, 8000)')
       }
       // Screenshot at device metrics (pane occupies left width, tall).
       try {
@@ -220,7 +225,7 @@ function htmlPage({ fixture, width, fixtureData, hostCfg, clean = false, themeSp
       #chip-root { position: absolute; top: 10px; left: ${width + 20}px; width: 320px; z-index: 5; border: 1px dashed rgba(128,128,128,.4); padding: 4px; }
       ${clean ? '#chip-root { display: none; }' : ''}
       #pane-root { width: ${width}px; height: ${PANE_HEIGHT}px; }
-      .harness-note { position: absolute; top: 10px; left: 10px; font: 11px/1.4 system-ui; color: #888; z-index: 9; }
+      .harness-note { position: absolute; bottom: 8px; left: 10px; font: 11px/1.4 system-ui; color: #888; z-index: 9; }
     </style>
     <script>
       window.__FIXTURE__ = { overview: ${JSON.stringify(fixtureData)}, host: ${JSON.stringify(hostCfg)} };

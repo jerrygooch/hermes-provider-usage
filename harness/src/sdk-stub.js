@@ -142,6 +142,26 @@ function sessionStatusPlan(sessionId) {
   return entry
 }
 
+// `subagent.list` fixture: either a payload, a map keyed by session id, or a
+// bare array of rows. The plugin reads the same fields the real gateway
+// publishes (subagent_id, goal, model, status, ...); a `provider` field is
+// honoured only because a future backend may publish it.
+function subagentPayload(sessionId) {
+  const fixtureData = fixture()
+  const raw = fixtureData.subagents
+  const payload = raw == null
+    ? null
+    : Array.isArray(raw)
+      ? { subagents: raw }
+      : Object.prototype.hasOwnProperty.call(raw, 'subagents')
+        ? raw
+        : raw[sessionId] || null
+  if (!payload) return { subagents: [], delegations: [] }
+  const delayMs = fixtureData.subagentDelayMs ?? 0
+  if (!delayMs) return payload
+  return new Promise(resolve => setTimeout(() => resolve(payload), delayMs))
+}
+
 // ---- host bridge ----
 export const host = {
   state: {
@@ -163,6 +183,9 @@ export const host = {
       return new Promise(resolve => {
         setTimeout(() => resolve({ info: { provider, session_id: id }, provider, session_id: id }), delayMs)
       })
+    }
+    if (method === 'subagent.list') {
+      return subagentPayload(params?.session_id)
     }
     return {}
   },

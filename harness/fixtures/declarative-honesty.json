@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "definition_catalog_version": 1,
+  "fetched_at": "2026-11-11T02:03:07Z",
+  "account_profile": "default",
+  "active": {
+    "provider": "example-balance",
+    "model": "mimo-v2.5"
+  },
+  "default_provider": "example-balance",
+  "providers": [
+    {
+      "id": "example-balance",
+      "label": "Example balance provider",
+      "definition": true,
+      "definition_id": "example-balance",
+      "definition_version": 1,
+      "definition_source": "profile",
+      "state": "ok",
+      "available": true,
+      "capability": "balance",
+      "plan": "Prepaid",
+      "limits": [],
+      "balances": [
+        {
+          "label": "Prepaid balance",
+          "amount": 12.5,
+          "unit": "currency",
+          "currency": null,
+          "detail": "Granted by support on Nov 1."
+        }
+      ],
+      "details": [],
+      "provenance": {
+        "kind": "declarative",
+        "definition_id": "example-balance",
+        "definition_version": 1,
+        "definition_source": "profile",
+        "definition_file": "example-balance.json",
+        "endpoint_host": "api.example.com",
+        "cache": "none",
+        "ttl_seconds": 300,
+        "scope": "default",
+        "overrides": null
+      },
+      "freshness": {
+        "fetched_at": "2026-11-11T02:03:07Z",
+        "age_seconds": 42,
+        "stale": false,
+        "ttl_seconds": 300
+      }
+    },
+    {
+      "id": "xai-oauth",
+      "label": "SuperGrok / xAI OAuth",
+      "available": true,
+      "plan": "SuperGrok",
+      "capability": "usage",
+      "limits": [
+        {
+          "id": "default",
+          "label": "SuperGrok",
+          "windows": [
+            {
+              "label": "Subscription window",
+              "remaining_percent": 62,
+              "reset_at": "2026-11-12T00:00:00Z"
+            }
+          ]
+        }
+      ],
+      "balances": [],
+      "details": []
+    }
+  ],
+  "catalog": {
+    "version": 1,
+    "profile": "default",
+    "directory": "$HERMES_HOME/provider-usage/providers",
+    "bundled_count": 1,
+    "profile_count": 5,
+    "counts": {
+      "connected": 1,
+      "available": 2,
+      "requires_approval": 1,
+      "blocked": 1,
+      "unverified": 1
+    },
+    "definitions": [
+      {
+        "id": "github-rate-limit",
+        "name": "GitHub API rate limit",
+        "state": "connected",
+        "source": "bundled",
+        "version": 1,
+        "host": "api.github.com"
+      },
+      {
+        "id": "needs-approval",
+        "name": "Needs approval",
+        "description": "A profile-local definition whose source has not been approved.",
+        "state": "requires_approval",
+        "source": "profile",
+        "version": 1,
+        "host": "api.example.com",
+        "credential_refs": [
+          {
+            "source": "hermes_provider",
+            "provider": "moonshot",
+            "field": "api_key"
+          }
+        ],
+        "missing_credentials": [
+          "moonshot.api_key"
+        ],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "needs-approval.json",
+          "approve": "python scripts/approve_definition.py <definition.json>"
+        },
+        "approval": {
+          "required": true,
+          "approved": false,
+          "reason": "This profile definition has not been approved on this machine. Review its destination and credential references, then run scripts/approve_definition.py."
+        },
+        "warnings": []
+      },
+      {
+        "id": "blocked-provider",
+        "name": "Blocked provider",
+        "description": "The backend refuses to fetch this definition.",
+        "state": "blocked",
+        "source": "profile",
+        "version": 1,
+        "host": "api.blocked.example",
+        "credential_refs": [
+          {
+            "source": "env",
+            "name": "BLOCKED_KEY"
+          }
+        ],
+        "missing_credentials": [
+          "BLOCKED_KEY"
+        ],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "blocked-provider.json"
+        },
+        "warnings": []
+      },
+      {
+        "id": "future-provider",
+        "name": "Future provider",
+        "description": "An unrecognized state from a newer backend.",
+        "state": "waiting_for_review",
+        "source": "profile",
+        "version": 1,
+        "host": "api.future.example",
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "future-provider.json"
+        },
+        "warnings": []
+      },
+      {
+        "id": "legacy-provider",
+        "name": "Legacy provider",
+        "description": "An older backend reports only missing credential labels.",
+        "state": "available",
+        "source": "profile",
+        "version": 1,
+        "host": "api.legacy.example",
+        "missing_credentials": [
+          "LEGACY_API_KEY"
+        ],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "legacy-provider.json"
+        },
+        "warnings": []
+      },
+      {
+        "id": "warned-provider",
+        "name": "Warned provider",
+        "description": "A definition whose mapping produced no windows.",
+        "state": "unverified",
+        "source": "profile",
+        "version": 1,
+        "host": "api.warned.example",
+        "credential_refs": [
+          {
+            "source": "env",
+            "name": "WARN_KEY"
+          }
+        ],
+        "missing_credentials": [],
+        "setup": {
+          "directory": "$HERMES_HOME/provider-usage/providers",
+          "file": "warned-provider.json"
+        },
+        "warnings": [
+          "Mapping path 'data.windows' is not an array, so no windows were read."
+        ]
+      }
+    ]
+  },
+  "host": {
+    "model": "mimo-v2.5",
+    "sessionId": "sess-honesty",
+    "profile": "default",
+    "connectionId": "local",
+    "gateway": "open",
+    "focusedSessionProfile": "default",
+    "focusedSessionOwner": {
+      "connectionId": "local",
+      "profile": "default"
+    }
+  }
+}

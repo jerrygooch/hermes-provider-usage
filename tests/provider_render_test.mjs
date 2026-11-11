@@ -122,7 +122,7 @@ const renderPage = () => renderToStaticMarkup(React.createElement(pageContributi
 // The provider is resolved asynchronously from the focused session. Under SSR
 // effects do not run, so seed the account memory the hook starts from (a real
 // mounted lifecycle is covered by plugin_lifecycle_test.mjs).
-const { activeSourceId, rememberProvider, DefinitionPanel } = mod.namespace
+const { activeSourceId, rememberProvider, DefinitionPanel, DefinitionBadge, CatalogSection, catalogSetupText } = mod.namespace
 function seedProvider(profile = 'default', provider = 'xai-oauth') {
   world.sessionId = ''
   rememberProvider(activeSourceId(world.connectionId, profile), provider)
@@ -323,7 +323,10 @@ world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'open'
-seedProvider('default')
+// Seed the definition itself as the focused provider so the ACTIVE card is the
+// declarative provider — the browser harness gets the same state from the
+// fixture's session.info event, but SSR effects never run.
+seedProvider('default', 'github-rate-limit')
 queryResult = {
   data: { ...fixture('2026-11-11T02:03:07Z'), providers: [definitionRow, ...fixture('2026-11-11T02:03:07Z').providers], catalog: definitionCatalog },
   isLoading: false,
@@ -333,18 +336,198 @@ queryResult = {
   refetch: () => {}
 }
 const pageDefinitions = renderPage()
+check('catalog section is titled provider definitions', pageDefinitions, 'Provider definitions')
 check('catalog section renders available-to-connect entries', pageDefinitions, 'Available to connect')
 check('catalog names the missing credential', pageDefinitions, 'Needs MOONSHOT_API_KEY')
+check('legacy catalog fallback admits it cannot type the credential', pageDefinitions, 'credential type not reported by this backend')
 check('catalog keeps invalid definitions visible with an error', pageDefinitions, 'mapping.windows[0].label: must not be empty')
 check('catalog explains the safe data-only model', pageDefinitions, 'No scripts, no eval')
-check('definition row shows its state badge', pageDefinitions, 'Definition')
+check('definition row shows its state badge', pageDefinitions, 'Connected')
 check('definition row keeps its windows', pageDefinitions, 'Core')
+check('definition card names the read-only boundary', pageDefinitions, 'Rate limit · read-only definition')
+nocheck('definition card does not claim a subscription allowance', pageDefinitions, 'Rate limit subscription allowance')
+nocheck('rate-limit definition does not claim a subscription renewal', pageDefinitions, 'Subscription renewal date is not exposed')
 
 const panelHtml = renderToStaticMarkup(React.createElement(DefinitionPanel, { row: definitionRow }))
 check('definition panel names the bundled source', panelHtml, 'Bundled definition github-rate-limit v1')
 check('definition panel shows cache and scope provenance', panelHtml, 'cached response')
 check('definition panel shows the endpoint host', panelHtml, 'api.github.com')
 check('definition panel shows the docs URL', panelHtml, 'docs.github.com')
+
+// ── Declarative honesty: state badges, credential types, warnings ───────────
+const renderCatalog = definitions => renderToStaticMarkup(React.createElement(CatalogSection, {
+  catalog: { version: 1, profile: 'default', directory: '$HERMES_HOME/provider-usage/providers', definitions }
+}))
+const renderBadge = row => renderToStaticMarkup(React.createElement(DefinitionBadge, { row }))
+
+check('ok definition badge is explicitly connected', renderBadge({ definition: true, state: 'ok' }), 'Connected')
+check('untrusted definition badge asks for approval', renderBadge({ definition: true, state: 'untrusted' }), 'Approval required')
+check('requires_approval row state asks for approval', renderBadge({ definition: true, state: 'requires_approval' }), 'Approval required')
+check('blocked definition badge says blocked', renderBadge({ definition: true, state: 'blocked' }), 'Blocked')
+const unknownBadge = renderBadge({ definition: true, state: 'waiting_for_review' })
+check('unknown definition state is neutral', unknownBadge, 'Unknown state')
+nocheck('unknown definition state never claims connected', unknownBadge, 'Connected')
+
+const untrustedEntry = {
+  id: 'needs-approval',
+  name: 'Needs approval',
+  state: 'requires_approval',
+  source: 'profile',
+  version: 1,
+  host: 'api.example.com',
+  credential_refs: [{ source: 'hermes_provider', provider: 'moonshot', field: 'api_key' }],
+  missing_credentials: ['moonshot.api_key'],
+  setup: {
+    directory: '$HERMES_HOME/provider-usage/providers',
+    file: 'needs-approval.json',
+    approve: 'python scripts/approve_definition.py <definition.json>'
+  },
+  warnings: []
+}
+const untrustedHtml = renderCatalog([untrustedEntry])
+check('untrusted catalog state asks for approval', untrustedHtml, 'Approval required')
+check('untrusted card names the Hermes credential type', untrustedHtml, 'Hermes credential moonshot.api_key')
+check('untrusted card names the destination host', untrustedHtml, 'Destination: api.example.com')
+check('untrusted card points at the CLI approval command', untrustedHtml, 'scripts/approve_definition.py')
+check('untrusted card makes approval a human CLI step', untrustedHtml, 'Approval is a human CLI step')
+nocheck('untrusted card never claims connected', untrustedHtml, 'Connected')
+const aliasHtml = renderCatalog([{ ...untrustedEntry, id: 'needs-approval-alias', state: 'untrusted' }])
+check('untrusted catalog alias also asks for approval', aliasHtml, 'Approval required')
+
+const blockedHtml = renderCatalog([{
+  id: 'blocked-provider', name: 'Blocked provider', state: 'blocked', source: 'profile', version: 1,
+  host: 'api.blocked.example', credential_refs: [{ source: 'env', name: 'BLOCKED_KEY' }],
+  missing_credentials: ['BLOCKED_KEY'], setup: { file: 'blocked-provider.json' }
+}])
+check('blocked catalog state says blocked', blockedHtml, 'Blocked')
+check('blocked card explains no fetch happened', blockedHtml, 'Nothing is fetched or displayed from it.')
+nocheck('blocked card never claims connected', blockedHtml, 'Connected')
+
+const unknownHtml = renderCatalog([{
+  id: 'future-provider', name: 'Future provider', state: 'waiting_for_review', source: 'profile', version: 1,
+  host: 'api.future.example', setup: { file: 'future-provider.json' }
+}])
+check('unknown catalog state is neutral', unknownHtml, 'Unknown state')
+nocheck('unknown catalog state never claims connected', unknownHtml, 'Connected')
+
+const mixedCatalogHtml = renderCatalog([
+  { id: 'connected-one', name: 'Connected one', state: 'connected', source: 'bundled', version: 1 },
+  { id: 'unknown-one', name: 'Unknown one', state: 'waiting', source: 'profile', version: 1 }
+])
+check('catalog counts only explicit connected states', mixedCatalogHtml, '1 connected')
+nocheck('catalog does not count unknown states as connected', mixedCatalogHtml, '2 connected')
+
+const legacyEntry = {
+  id: 'legacy-provider', name: 'Legacy provider', state: 'available', source: 'profile', version: 1,
+  host: 'api.legacy.example', missing_credentials: ['LEGACY_API_KEY'], setup: { file: 'legacy-provider.json' }
+}
+const legacyHtml = renderCatalog([legacyEntry])
+check('legacy missing credential is still named', legacyHtml, 'Needs LEGACY_API_KEY')
+check('legacy fallback says the type is not reported', legacyHtml, 'credential type not reported by this backend')
+nocheck('legacy fallback does not invent an environment type', legacyHtml, 'environment variable')
+const envFallbackHtml = renderCatalog([{
+  ...legacyEntry,
+  id: 'env-fallback-provider',
+  missing_credentials: undefined,
+  setup: { file: 'env-fallback-provider.json', env: ['ENV_FALLBACK_KEY'] }
+}])
+check('legacy setup.env fallback is still read', envFallbackHtml, 'ENV_FALLBACK_KEY')
+const unknownSourceHtml = renderCatalog([{ ...legacyEntry, id: 'unknown-source-provider', source: undefined }])
+check('catalog unknown source is labeled honestly', unknownSourceHtml, 'Source not reported')
+nocheck('catalog does not invent an official source', unknownSourceHtml, 'Official')
+nocheck('catalog helper text avoids the quaternary contrast token', untrustedHtml, '--ui-text-quaternary')
+
+const warningEntry = {
+  id: 'warned-provider', name: 'Warned provider', state: 'unverified', source: 'profile', version: 1,
+  host: 'api.warned.example', credential_refs: [{ source: 'env', name: 'WARN_KEY' }],
+  warnings: ["Mapping path 'data.windows' is not an array, so no windows were read."],
+  setup: { file: 'warned-provider.json' }
+}
+const warningHtml = renderCatalog([warningEntry])
+check('catalog surfaces mapping warnings', warningHtml, 'is not an array, so no windows were read.')
+check('catalog warning copy is labeled', warningHtml, 'Warnings:')
+
+const copyText = catalogSetupText(untrustedEntry)
+check('copied setup names the destination host', copyText, 'Destination: api.example.com')
+check('copied setup names the credential type', copyText, 'Hermes credential moonshot.api_key')
+check('copied setup names the CLI approval command', copyText, 'python scripts/approve_definition.py')
+check('copied setup requires the interactive approve word', copyText, 'type "approve"')
+check('copied setup says copying is not approval', copyText, 'Copying or saving does not approve it')
+check('copied setup denies UI trust and fetching', copyText, 'never grants trust or fetches data for you')
+nocheck('copied setup does not report approval as done', copyText, 'Approved:')
+
+// Balance detail must survive, and a missing currency must not become USD.
+const balanceDetailRow = {
+  id: 'example-balance',
+  label: 'Example balance',
+  definition: true,
+  definition_id: 'example-balance',
+  definition_version: 1,
+  definition_source: 'profile',
+  state: 'ok',
+  available: true,
+  capability: 'balance',
+  plan: 'Prepaid',
+  limits: [],
+  balances: [{
+    label: 'Prepaid balance',
+    amount: 12.5,
+    unit: 'currency',
+    detail: 'Granted by support on Nov 1.'
+  }],
+  details: [],
+  provenance: {
+    kind: 'declarative',
+    definition_id: 'example-balance',
+    definition_version: 1,
+    definition_source: 'profile',
+    definition_file: 'example-balance.json',
+    endpoint_host: 'api.example.com',
+    cache: 'none',
+    ttl_seconds: 300,
+    scope: 'default',
+    overrides: null
+  },
+  freshness: { fetched_at: '2026-11-11T02:03:07Z', age_seconds: 42, stale: false, ttl_seconds: 300 }
+}
+
+world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+world.gateway = 'open'
+seedProvider('default', 'example-balance')
+queryResult = {
+  data: { ...fixture('2026-11-11T02:03:07Z'), providers: [balanceDetailRow, ...fixture('2026-11-11T02:03:07Z').providers], catalog: { definitions: [] } },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  error: null,
+  refetch: () => {}
+}
+const pageBalanceDetail = renderPage()
+check('balance detail from the mapping is rendered', pageBalanceDetail, 'Granted by support on Nov 1.')
+check('unknown balance currency is labeled unknown', pageBalanceDetail, 'currency not reported')
+nocheck('unknown balance currency is not relabeled USD', pageBalanceDetail, '$12.50')
+nocheck('definition notes do not invent a subscription renewal', pageBalanceDetail, 'Subscription renewal date is not exposed')
+
+// Legacy built-in USD balances still use the dollar sign.
+const usdBalanceRow = {
+  id: 'nous', label: 'Nous Portal', available: true, capability: 'balance', plan: 'API credits',
+  limits: [], balances: [{ label: 'Balance', amount: 43.5, currency: 'USD' }], details: []
+}
+seedProvider('default', 'nous')
+queryResult = {
+  data: { ...fixture('2026-11-11T02:03:07Z'), providers: [usdBalanceRow, ...fixture('2026-11-11T02:03:07Z').providers] },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  error: null,
+  refetch: () => {}
+}
+const pageUsdBalance = renderPage()
+check('legacy USD built-in balance keeps the dollar sign', pageUsdBalance, '$43.50')
+nocheck('legacy USD built-in is not labeled currency-unknown', pageUsdBalance, 'currency not reported')
 
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)

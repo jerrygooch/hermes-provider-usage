@@ -11,7 +11,7 @@ import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
@@ -74,7 +74,11 @@ function htmlPage({ fixture, width, fixtureData, hostCfg, themeSpec = null }) {
       #pane-root { width: ${width}px; height: ${PANE_HEIGHT}px; }
     </style>
     <script>
-      window.__FIXTURE__ = { overview: ${JSON.stringify(fixtureData)}, host: ${JSON.stringify(hostCfg)} };
+      window.__FIXTURE__ = {
+        overview: ${JSON.stringify(fixtureData)},
+        subagents: ${JSON.stringify(fixtureData.subagents || {})},
+        host: ${JSON.stringify(hostCfg)}
+      };
       window.__HARNESS_THEME__ = ${JSON.stringify(themeSpec)};
       window.__CAPTURE__ = { fixture: ${JSON.stringify(fixture)}, paneWidth: ${width}, paneHeight: ${PANE_HEIGHT}, chipWidth: 320, body: true };
     </script>
@@ -186,23 +190,75 @@ const popGeo = await cdp.eval(`(() => {
 })()`)
 console.log('POPOVER GEO:', JSON.stringify(popGeo))
 
-const pass = Boolean(popoverText && popGeo && popGeo.visible && popGeo.viewAll)
+// The running-agents footer: present only when the fixture reports live
+// children, subordinate in weight (smaller type than the 13px provider title),
+// and inside the popover's width. If the popover scrolls, bring the footer into
+// view so the capture shows it instead of the clipped top.
+const expectsAgents = Boolean(fixtureData.subagents && Object.keys(fixtureData.subagents).length)
+const footerGeo = await cdp.eval(`(() => {
+  const pop = document.querySelector('[data-slot="popover-content"]')
+  const section = pop && pop.querySelector('[data-running-agents]')
+  if (!section) return { present: false }
+  const rows = Array.from(section.querySelectorAll('[data-running-agent]'))
+  const r = section.getBoundingClientRect()
+  const popRect = pop.getBoundingClientRect()
+  const rowStyle = rows[0] ? getComputedStyle(rows[0]) : null
+  return {
+    present: true,
+    count: section.getAttribute('data-running-agents'),
+    text: section.innerText.slice(0, 500),
+    w: r.width,
+    h: r.height,
+    popW: popRect.width,
+    popH: popRect.height,
+    scrollHeight: pop.scrollHeight,
+    clientHeight: pop.clientHeight,
+    rowFontSize: rowStyle ? rowStyle.fontSize : null,
+    rows: rows.map(row => ({ text: row.innerText, fontSize: getComputedStyle(row).fontSize, w: row.getBoundingClientRect().width })).slice(0, 6)
+  }
+})()`)
+console.log('FOOTER GEO:', JSON.stringify(footerGeo))
+
+let footerOk = true
+if (expectsAgents) {
+  footerOk = Boolean(footerGeo && footerGeo.present && footerGeo.count && footerGeo.rows.length > 0 &&
+    footerGeo.w <= footerGeo.popW && footerGeo.rowFontSize && parseFloat(footerGeo.rowFontSize) < 12 &&
+    /Running agents/.test(footerGeo.text))
+  if (!footerOk) console.error('FAIL: running-agents footer missing, overflowing, or not subordinate in weight.', JSON.stringify(footerGeo))
+} else if (footerGeo && footerGeo.present) {
+  footerOk = false
+  console.error('FAIL: running-agents footer rendered with no live children.')
+}
+
+const pass = Boolean(popoverText && popGeo && popGeo.visible && popGeo.viewAll) && footerOk
 console.log(pass
-  ? 'POPOVER VERIFY: PASS — chip click opens the popover with "View all providers".'
-  : 'POPOVER VERIFY: FAIL — the chip click did not open a usable popover.')
+  ? 'POPOVER VERIFY: PASS — chip click opens the popover with "View all providers" and the running-agents footer.'
+  : 'POPOVER VERIFY: FAIL — the chip click did not open a usable popover (or its footer is wrong).')
 if (!pass) process.exitCode = 1
 
 // Hide the page behind the popover so the capture shows the popover alone
-await cdp.eval(`(() => { const p = document.getElementById('pane-root'); if (p) p.style.visibility = 'hidden'; return true })()`)
+await cdp.eval(`(() => {
+  const p = document.getElementById('pane-root'); if (p) p.style.visibility = 'hidden'
+  const section = document.querySelector('[data-running-agents]')
+  if (section) section.scrollIntoView({ block: 'nearest' })
+  return true
+})()`)
 await sleep(300)
 try {
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
+  // Keep the long-standing `popover-open_w<width>.png` name (export-previews.py
+  // maps it into README assets) and add a fixture-qualified copy.
   fs.writeFileSync(path.join(shots, `popover-open_w${width}.png`), Buffer.from(shot.data, 'base64'))
-  console.log('SCREENSHOT:', path.join(shots, `popover-open_w${width}.png`))
+  fs.writeFileSync(path.join(shots, `popover-${fixture}_w${width}.png`), Buffer.from(shot.data, 'base64'))
+  console.log('SCREENSHOT:', path.join(shots, `popover-${fixture}_w${width}.png`))
 } catch (e) { console.error('screenshot failed', e.message) }
 
 cdp.close()
 server.close()
+try {
+  if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(chrome.pid), '/T', '/F'], { stdio: 'ignore' })
+  else process.kill(-chrome.pid)
+} catch { /* best-effort cleanup */ }
 try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
 console.log('DONE')
 // Exit non-zero when anything failed above (the wiring check or the popover check).

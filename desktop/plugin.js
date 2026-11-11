@@ -26,8 +26,6 @@ const HAIRLINE = '1px solid var(--ui-stroke-tertiary)'
 const OVERVIEW_ROUTE = '/provider-usage'
 const textPrimary = { color: 'var(--ui-text-primary)' }
 const textSecondary = { color: 'var(--ui-text-secondary)' }
-const textTertiary = { color: 'var(--ui-text-tertiary)' }
-const textQuaternary = { color: 'var(--ui-text-quaternary)' }
 const lastFocusedProviders = new Map()
 // A real profile swap settles on readiness, or after this bounded window when
 // the new backend is slow — never an infinite "switching profile" spinner.
@@ -438,6 +436,10 @@ function rateAmount(value) {
   return `$${number >= 0.01 ? number.toFixed(2) : number.toFixed(3)}`
 }
 
+function formatAmount(amount) {
+  return Number.isFinite(amount) ? amount.toFixed(2) : '—'
+}
+
 function money(balance) {
   const amount = Number(balance?.amount)
   if (!Number.isFinite(amount)) return '—'
@@ -449,8 +451,11 @@ function money(balance) {
       : amount.toFixed(2)
     return `${value} ${label}`
   }
-  const currency = String(balance?.currency || 'USD').toUpperCase()
-  return currency === 'USD' ? `$${amount.toFixed(2)}` : `${currency} ${amount.toFixed(2)}`
+  const currency = String(balance?.currency || '').trim().toUpperCase()
+  // Missing currency is NOT USD. An unknown code stays visibly unknown instead
+  // of borrowing the dollar sign and overstating what the provider reported.
+  if (!currency) return `${formatAmount(amount)} (currency not reported)`
+  return currency === 'USD' ? `$${formatAmount(amount)}` : `${currency} ${formatAmount(amount)}`
 }
 
 function compactProviderLabel(row) {
@@ -671,6 +676,240 @@ function chipDescription(row, model, data, switching, ready, refetchError, scope
   return `${row.label}: ${statusFundingSummary(row, model)}.${modelName}${accountNote} Open the Provider Usage pane for every reported window. Updated ${updated}.`
 }
 
+// ── Running agents (delegated children of THIS chat) ─────────────────────────
+// Identity is the gateway's session-scoped, owner-checked `subagent.list` read.
+// Its rows publish the child's id, goal, model, status, start time, and — on a
+// backend with the running-agents metadata seam — the provider its runtime
+// actually resolved plus a stable non-secret account id. A model slug is NOT
+// proof of a provider; neither is the popover's active provider. Usage is
+// attached only when the row publishes an account id AND this account's cached
+// inventory row names exactly one matching account identity (same credential,
+// same profile/connection scope). Anything else shows `—`, never a borrowed
+// balance. The pool is always the provider's shared pool, never per-agent spend.
+const RUNNING_AGENTS_REFRESH_MS = 5_000
+const RUNNING_AGENT_TERMINAL = new Set(['completed', 'failed', 'interrupted', 'cancelled', 'canceled', 'timeout', 'error'])
+
+function runningAgentsQueryKey(sourceId, sessionId) {
+  // Session + connection-qualified: two chats, or the same chat name on another
+  // source, must never share a running-agent snapshot.
+  return ['provider-usage', 'running-agents', sourceId || '', sessionId || '']
+}
+
+function normaliseRunningAgents(payload, sessionId) {
+  const bound = String(payload?.session_id || payload?.sessionId || '').trim()
+  // A late payload for a conversation we already left is discarded outright.
+  if (bound && sessionId && bound !== sessionId) return []
+  const rows = Array.isArray(payload?.subagents) ? payload.subagents : []
+  const seen = new Set()
+  return rows
+    .map(row => ({
+      id: String(row?.subagent_id || '').trim(),
+      goal: typeof row?.goal === 'string' ? row.goal : '',
+      model: typeof row?.model === 'string' ? row.model.trim() : '',
+      provider: typeof row?.provider === 'string' ? row.provider.trim() : '',
+      providerAccountId: typeof row?.provider_account_id === 'string' ? row.provider_account_id.trim() : '',
+      status: String(row?.status || 'running').trim().toLowerCase(),
+      depth: finiteNumber(row?.depth),
+      startedAt: finiteNumber(row?.started_at)
+    }))
+    .filter(row => {
+      if (!row.id || RUNNING_AGENT_TERMINAL.has(row.status) || seen.has(row.id)) return false
+      seen.add(row.id)
+      return true
+    })
+}
+
+// Provider truth is only what the backend publishes. A provider-qualified model
+// slug (`openrouter/...`) is a model namespace, not an executed route: the same
+// slug can be served by another gateway/account, so it never verifies a pool.
+function runningAgentProvider(agent) {
+  return normaliseProvider(agent?.provider)
+}
+
+function runningAgentAccountId(agent) {
+  return String(agent?.providerAccountId || '').trim()
+}
+
+function inventoryAccount(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  const id = String(entry.identity_id || entry.account_id || entry.id || '').trim()
+  if (!id) return null
+  return { id, label: String(entry.label || entry.name || '').trim() }
+}
+
+// The account identity a cached provider row actually belongs to. A row may
+// carry one `accounts` entry (core `ProviderUsageAccount`, key `id`) or the
+// flat `identity_id` from `list_account_usage_identities`. The provider `id` is
+// never treated as an account id.
+function providerInventoryAccounts(row) {
+  const seen = new Set()
+  const accounts = []
+  const listed = Array.isArray(row?.accounts) ? row.accounts : []
+  for (const entry of listed) {
+    const account = inventoryAccount(entry)
+    if (account && !seen.has(account.id)) { seen.add(account.id); accounts.push(account) }
+  }
+  const direct = String(row?.identity_id || row?.account_id || '').trim()
+  if (direct && !seen.has(direct)) accounts.push({ id: direct, label: String(row?.account_label || '').trim() })
+  return accounts
+}
+
+// Only a row that belongs to exactly one account can prove its cached pool is
+// the child's pool. A multi-account row (or none) is ambiguous by construction:
+// attaching its figure could show another credential's quota, so it stays unknown.
+function runningAgentAccount(agent, row) {
+  const wanted = runningAgentAccountId(agent)
+  if (!wanted || !row) return null
+  const accounts = providerInventoryAccounts(row)
+  return accounts.length === 1 && accounts[0].id === wanted ? accounts[0] : null
+}
+
+function sharedPoolUsage(row, model) {
+  if (!row || row.available === false) return null
+  const text = String(compactFundingSummary(row, model) || '').trim()
+  if (!text || text === '—') return null
+  // Only a quantified figure is usage. "available" / "limited data" / a prose
+  // detail line are not a percentage or a credit balance.
+  if (!(/%/.test(text) || /\$/.test(text) || /^\d/.test(text))) return null
+  return { text, exhausted: Boolean(fundingState(row, model).exhausted) }
+}
+
+function runningAgentGroups(rows, { providerRows } = {}) {
+  const inventory = new Map()
+  for (const entry of Array.isArray(providerRows) ? providerRows : []) {
+    const id = normaliseProvider(entry?.id)
+    if (id) inventory.set(id, entry)
+  }
+  const groups = new Map()
+  for (const agent of Array.isArray(rows) ? rows : []) {
+    if (!agent || !agent.id) continue
+    const provider = runningAgentProvider(agent)
+    const model = String(agent.model || '').trim()
+    const accountId = provider ? runningAgentAccountId(agent) : ''
+    // A published (even unverified) account id is part of identity: two workers
+    // on different credentials must not collapse into one row. No provider means
+    // no account claim at all, so the model-only group stays anonymous.
+    const accountKey = accountId ? `a:${accountId}` : 'a:?'
+    const key = provider ? `p:${provider}::${accountKey}::${model}` : model ? `m:${model}` : 'identity-unknown'
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key, provider, providerLabel: '', model, accountId, accountLabel: '',
+        accountVerified: false, count: 0, goals: [], usage: null, exhausted: false
+      }
+      groups.set(key, group)
+    }
+    group.count += 1
+    if (agent.goal) group.goals.push(agent.goal)
+  }
+  for (const group of groups.values()) {
+    if (!group.provider) continue
+    const row = inventory.get(group.provider)
+    if (row) group.providerLabel = String(row.label || row.name || group.provider)
+    const account = runningAgentAccount({ providerAccountId: group.accountId }, row)
+    group.accountVerified = Boolean(account)
+    group.accountLabel = account?.label || ''
+    if (!account) continue
+    const usage = sharedPoolUsage(row, group.model)
+    group.usage = usage ? usage.text : null
+    group.exhausted = Boolean(usage?.exhausted)
+  }
+  return [...groups.values()]
+}
+
+function runningAgentTotal(groups) {
+  return (Array.isArray(groups) ? groups : [])
+    .reduce((sum, group) => sum + (group && group.count > 0 ? group.count : 0), 0)
+}
+
+function RunningAgentRow({ group }) {
+  const modelText = group.model || 'model not reported'
+  const providerText = group.provider
+    ? [group.providerLabel || group.provider, group.accountLabel].filter(Boolean).join(' · ')
+    : 'provider not reported'
+  const usageText = group.usage || '—'
+  const tip = [
+    group.count > 1 ? `${group.count} running` : 'Running',
+    ...group.goals.slice(0, 3),
+    group.provider
+      ? group.accountVerified
+        ? `Shared ${group.providerLabel || group.provider} pool${group.usage ? `: ${group.usage}` : ': usage unknown'}${group.accountLabel ? ` for ${group.accountLabel}` : ''}`
+        : 'The backend reports this child’s provider but not a matching account for this profile, so usage is unavailable.'
+      : 'This backend does not report the child’s provider, so no account is attributed.'
+  ].join('\n')
+  return jsx(Tip, {
+    label: tip,
+    children: jsxs('div', {
+      'data-running-agent': group.key,
+      style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: 10.5, lineHeight: 1.35 },
+      children: [
+        jsx(StatusDot, { tone: group.exhausted ? 'warn' : group.usage ? 'good' : 'muted', style: { flex: '0 0 auto' } }, 'dot'),
+        jsxs('span', {
+          style: { flex: '1 1 auto', minWidth: 0, display: 'flex', gap: 4, alignItems: 'baseline', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' },
+          children: [
+            group.count > 1
+              ? jsx('span', { style: { ...textSecondary, fontVariantNumeric: 'tabular-nums', flex: '0 0 auto' }, children: `${group.count}×` }, 'count')
+              : null,
+            jsx('span', { style: { ...textSecondary, overflow: 'hidden', textOverflow: 'ellipsis' }, children: modelText }, 'model'),
+            jsx('span', { style: { color: 'var(--ui-text-tertiary)', flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' }, children: `· ${providerText}` }, 'provider')
+          ]
+        }),
+        jsx('span', {
+          'aria-label': group.usage
+            ? `Shared pool ${group.usage}`
+            : group.provider
+              ? 'Shared pool usage unavailable: account not verified'
+              : 'Shared pool usage unknown',
+          style: { flex: '0 0 auto', fontSize: 10, fontVariantNumeric: 'tabular-nums', color: group.exhausted ? 'var(--ui-orange)' : 'var(--ui-text-tertiary)' },
+          children: usageText
+        }, 'usage')
+      ]
+    })
+  })
+}
+
+function RunningAgentsSection({ groups }) {
+  const rows = Array.isArray(groups) ? groups.filter(group => group && group.count > 0) : []
+  if (rows.length === 0) return null
+  const total = runningAgentTotal(rows)
+  return jsxs('section', {
+    'aria-label': `Running agents: ${total}`,
+    'data-running-agents': String(total),
+    style: { display: 'grid', gap: 5, borderTop: HAIRLINE, paddingTop: 9, marginTop: 1 },
+    children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+        children: [
+          jsx('span', { style: { ...textSecondary, fontSize: 10, fontWeight: 600 }, children: 'Running agents' }, 'label'),
+          jsx('span', { style: { ...textSecondary, fontSize: 10, fontVariantNumeric: 'tabular-nums' }, children: total === 1 ? '1 agent' : `${total} agents` }, 'count')
+        ]
+      }),
+      ...rows.map(group => jsx(RunningAgentRow, { group }, group.key))
+    ]
+  })
+}
+
+// Query wrapper: ONE `subagent.list` read for the whole footer (never one per
+// agent), only while the popover is actually open on a ready socket. Polling
+// stops the moment either stops being true, so a closed popover is silent.
+function RunningAgentsFooter({ sessionId, active, gateway, sourceId, providerRows }) {
+  const enabled = Boolean(active && sessionId) && gatewayReady(gateway)
+  const agents = useQuery({
+    queryKey: runningAgentsQueryKey(sourceId, sessionId),
+    enabled,
+    staleTime: 4_000,
+    refetchInterval: RUNNING_AGENTS_REFRESH_MS,
+    retry: 1,
+    queryFn: async () => normaliseRunningAgents(
+      await host.request('subagent.list', { session_id: sessionId }),
+      sessionId
+    )
+  })
+  const rows = enabled && Array.isArray(agents.data) ? agents.data : []
+  const groups = runningAgentGroups(rows, { providerRows })
+  return jsx(RunningAgentsSection, { groups })
+}
+
 function formatReset(value) {
   if (!value) return 'Reset time unavailable'
   const date = new Date(value)
@@ -786,7 +1025,7 @@ function UsageMeter({ window, compact = false }) {
           }
         })
       }),
-      jsx('span', { style: { ...textTertiary, fontSize: 10.5, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: dollarWindowSummary(window) ? (window?.reset_at ? formatReset(window.reset_at) : 'Resets with the plan') : windowMeta(window) })
+      jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: dollarWindowSummary(window) ? (window?.reset_at ? formatReset(window.reset_at) : 'Resets with the plan') : windowMeta(window) })
     ]
   })
 }
@@ -799,24 +1038,32 @@ function BalanceMetric({ balance, prominent = false, subdued = false }) {
   const usedRatio = Number.isFinite(total) && total > 0 && Number.isFinite(used)
     ? Math.max(0, Math.min(1, used / total))
     : null
+  const unit = String(balance?.unit || 'currency').toLowerCase()
+  const currency = String(balance?.currency || '').trim().toUpperCase()
+  const unknownCurrency = unit === 'currency' && !currency
+  const moneyValue = amount => unknownCurrency
+    ? formatAmount(amount)
+    : money({ amount, currency, unit: balance?.unit, unitLabel: balance?.unitLabel })
+  const detail = typeof balance?.detail === 'string' ? balance.detail.trim() : ''
   const details = [
     Number.isFinite(total) && Number.isFinite(used)
-      ? `${money({ amount: used, currency: balance?.currency })} used of ${money({ amount: total, currency: balance?.currency })}`
+      ? `${moneyValue(used)} used of ${moneyValue(total)}`
       : null,
     Number.isFinite(granted)
-      ? `${money({ amount: granted, currency: balance?.currency })} granted`
+      ? `${moneyValue(granted)} granted`
       : null,
     Number.isFinite(toppedUp)
-      ? `${money({ amount: toppedUp, currency: balance?.currency })} topped up`
+      ? `${moneyValue(toppedUp)} topped up`
       : null,
+    detail || null,
     balance?.expires_at ? `Expires ${new Date(balance.expires_at).toLocaleString()}` : null
   ].filter(Boolean)
   return jsxs('div', {
     style: { display: 'grid', gap: 2, padding: prominent ? '1px 0' : '7px 0' },
     children: [
-      jsx('span', { style: { ...(subdued ? textQuaternary : textTertiary), fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: balance?.label || 'Balance' }),
+      jsx('span', { style: { ...textSecondary, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: balance?.label || 'Balance' }),
       jsx('strong', {
-        style: { ...(subdued ? textTertiary : textPrimary), fontSize: prominent ? 27 : subdued ? 12 : 20, fontWeight: subdued ? 550 : 650, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' },
+        style: { ...(subdued ? textSecondary : textPrimary), fontSize: prominent ? 27 : subdued ? 12 : 20, fontWeight: subdued ? 550 : 650, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' },
         children: money(balance)
       }),
       usedRatio != null
@@ -831,7 +1078,7 @@ function BalanceMetric({ balance, prominent = false, subdued = false }) {
           })
         : null,
       details.length > 0
-        ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5 }, children: details.join(' · ') })
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.5, overflowWrap: 'anywhere' }, children: details.join(' · ') })
         : null
     ]
   })
@@ -856,10 +1103,10 @@ function SectionLabel({ children, aside = null }) {
     style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
     children: [
       jsx('h3', {
-        style: { ...textTertiary, margin: 0, fontSize: 10, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.07em' },
+        style: { ...textSecondary, margin: 0, fontSize: 10, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.07em' },
         children
       }),
-      aside ? jsx('span', { style: { ...textQuaternary, fontSize: 9 }, children: aside }) : null
+      aside ? jsx('span', { style: { ...textSecondary, fontSize: 9 }, children: aside }) : null
     ]
   })
 }
@@ -871,7 +1118,7 @@ function SectionTitle({ children, aside = null }) {
     style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
     children: [
       jsx('h3', { style: { ...textPrimary, margin: 0, fontSize: 12, lineHeight: 1.35, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children }),
-      aside ? jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: aside }) : null
+      aside ? jsx('span', { style: { ...textSecondary, fontSize: 10 }, children: aside }) : null
     ]
   })
 }
@@ -893,7 +1140,7 @@ function LimitGroup({ rowId, limit, grouped = false }) {
           jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.4, fontWeight: 600 }, children: limit?.label || 'Account limit' }),
           limit?.allowed != null || limit?.limit_reached != null
             ? jsx('span', {
-                style: { ...(blocked ? textSecondary : textQuaternary), color: blocked ? 'var(--dt-destructive)' : undefined, fontSize: 9, fontWeight: blocked ? 650 : 500, textTransform: 'uppercase', letterSpacing: '0.05em' },
+                style: { ...textSecondary, color: blocked ? 'var(--dt-destructive)' : undefined, fontSize: 9, fontWeight: blocked ? 650 : 500, textTransform: 'uppercase', letterSpacing: '0.05em' },
                 children: blocked ? blockedLabel : 'Available'
               })
             : null
@@ -961,12 +1208,12 @@ function PeakNote({ peak, separated = false }) {
         style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
         children: [
           jsx(Badge, { variant: isPeak ? 'warn' : 'success', size: 'xs', children: isPeak ? `Peak now${multiplier}` : 'Off-peak now' }, 'badge'),
-          hint ? jsx('span', { style: { ...textTertiary, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' }, children: hint }, 'hint') : null
+          hint ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' }, children: hint }, 'hint') : null
         ]
       }),
       peak.schedule_local || peak.schedule
         ? jsx('span', {
-            style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 },
+            style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 },
             title: peak.schedule_local
               ? [
                   `Published schedule (UTC): ${peak.schedule}`,
@@ -1005,8 +1252,8 @@ function RatesPanel({ row, always = false, compact = false }) {
               ]
             }, `rate-${index}`))
           }, 'rows')
-        : jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: 'No published token-rate card is available for this provider yet.' }, 'empty'),
-      source ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45 }, children: source }, 'source') : null,
+        : jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: 'No published token-rate card is available for this provider yet.' }, 'empty'),
+      source ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: source }, 'source') : null,
       pricing.some(entry => entry?.changed_from_card)
         ? jsx('span', {
             style: { color: 'var(--ui-orange)', fontSize: 9.5, lineHeight: 1.45, fontWeight: 550 },
@@ -1060,7 +1307,7 @@ function BreakdownPanel({ row, compact = false }) {
         })
       }, 'rows'),
       row.breakdown_note
-        ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: row.breakdown_note }, 'note')
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: row.breakdown_note }, 'note')
         : null
     ]
   })
@@ -1112,7 +1359,7 @@ function CachePanel({ cache, compact = false }) {
         style: { height: compact ? 4 : 5, borderRadius: 999, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
         children: jsx('div', { style: { width: `${Math.max(2, Math.round(hitRate * 100))}%`, height: '100%', borderRadius: 999, background: 'var(--ui-accent)' } })
       }, 'bar'),
-      jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: meta }, 'meta')
+      jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: meta }, 'meta')
     ]
   })
 }
@@ -1169,7 +1416,7 @@ function ActivityPanel({ activity, compact = false }) {
             })
           }, 'spark')
         : null,
-      tokens ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: tokens }, 'meta') : null
+      tokens ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: tokens }, 'meta') : null
     ]
   })
 }
@@ -1236,7 +1483,7 @@ function ModelAccess({ row }) {
           style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, fontSize: 10, lineHeight: 1.45 },
           children: [
             jsx('span', { style: { ...textSecondary, fontWeight: 500 }, children: entry?.model || 'Model' }),
-            jsx('span', { style: { ...textQuaternary, textAlign: 'right' }, children: status })
+            jsx('span', { style: { ...textSecondary, textAlign: 'right' }, children: status })
           ]
         }, `${entry?.model}-${index}`)
       })
@@ -1251,10 +1498,16 @@ function ProviderNotes({ row, complete = false }) {
   const spendControl = row?.spend_control
   const localMessages = messageRange(creditStatus?.approx_local_messages)
   const cloudMessages = messageRange(creditStatus?.approx_cloud_messages)
+  // A declarative usage definition (e.g. GitHub's rate-limit window) is not a
+  // subscription or inference balance. Do not invent renewal/billing copy for
+  // it unless the row actually carries billing metadata.
+  const hasBillingMetadata = Boolean(
+    renewalAt || creditStatus || spendControl || row?.subscription
+  )
   const facts = [
     renewalAt
       ? `Subscription renews ${new Date(renewalAt).toLocaleString()}`
-      : complete && row?.plan ? 'Subscription renewal date is not exposed by this provider.' : null,
+      : complete && row?.plan && (!row?.definition || hasBillingMetadata) ? 'Subscription renewal date is not exposed by this provider.' : null,
     creditStatus?.unlimited
       ? 'Extra usage is unlimited.'
       : creditStatus
@@ -1284,10 +1537,10 @@ function ProviderNotes({ row, complete = false }) {
         style: { display: 'grid', gridTemplateColumns: 'minmax(132px, 0.38fr) minmax(0, 1fr)', columnGap: 16, rowGap: 6 },
         children: entries.flatMap((entry, index) => entry.label
           ? [
-              jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.4 }, children: entry.label }, `label-${index}`),
+              jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.4 }, children: entry.label }, `label-${index}`),
               jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }, children: entry.value }, `value-${index}`)
             ]
-          : [jsx('span', { style: { ...textTertiary, gridColumn: '1 / -1', fontSize: 11, lineHeight: 1.4 }, children: entry.value }, `full-${index}`)])
+          : [jsx('span', { style: { ...textSecondary, gridColumn: '1 / -1', fontSize: 11, lineHeight: 1.4 }, children: entry.value }, `full-${index}`)])
       })
     ]
   })
@@ -1295,22 +1548,29 @@ function ProviderNotes({ row, complete = false }) {
 
 function definitionStateMeta(row) {
   if (!row?.definition) return null
-  const state = String(row?.state || '')
+  const state = String(row?.state || '').toLowerCase()
+  // Positive green is reserved for an explicitly reported successful state.
+  // Unknown, future, or locally blocked states must never borrow "Connected".
+  if (state === 'connected' || state === 'ok') return { label: 'Connected', variant: 'success' }
+  if (state === 'untrusted' || state === 'requires_approval') return { label: 'Approval required', variant: 'warn', tone: 'warn' }
+  if (state === 'blocked') return { label: 'Blocked', variant: 'destructive' }
   if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn', tone: 'warn' }
   if (state === 'not_connected') return { label: 'Not connected', variant: 'muted' }
   if (state === 'unavailable') return { label: 'Unavailable', variant: 'muted' }
   if (state === 'unverified') return { label: 'Unverified mapping', variant: 'warn' }
   if (state === 'stale') return { label: 'Stale data', variant: 'warn' }
-  if (state === 'invalid_definition') return { label: 'Invalid definition', variant: 'destructive' }
-  return null
+  if (state === 'invalid_definition' || state === 'invalid') return { label: 'Invalid definition', variant: 'destructive' }
+  return { label: 'Unknown state', variant: 'muted' }
 }
 
 function DefinitionBadge({ row }) {
   if (!row?.definition) return null
   const meta = definitionStateMeta(row)
+  const neutral = !meta?.variant || meta.variant === 'outline' || meta.variant === 'muted'
   return jsx(Badge, {
     variant: meta?.variant || 'outline',
     size: 'xs',
+    style: neutral ? { color: 'var(--ui-text-secondary)' } : undefined,
     children: meta?.label || 'Definition'
   })
 }
@@ -1333,36 +1593,51 @@ function DefinitionPanel({ row }) {
       ? 'stale cached response'
       : prov.cache === 'none'
         ? 'not fetched'
-        : 'fresh fetch'
-  const source = prov.definition_source === 'profile' ? 'Profile definition' : 'Bundled definition'
+        : 'cache state not reported'
+  const source = prov.definition_source === 'profile'
+    ? 'Profile definition'
+    : prov.definition_source === 'bundled'
+      ? 'Bundled definition'
+      : 'Definition source not reported'
   const override = prov.overrides ? ' · overrides bundled copy' : ''
-  const error = prov.error || (row.state && row.state !== 'ok' ? row.unavailable_reason : null)
+  const version = prov.definition_version != null ? ` v${prov.definition_version}` : ''
+  const credentialRefs = credentialRefsOf({
+    credential_refs: row?.approval?.credential_refs || prov.credential_refs
+  })
+  const rowState = String(row?.state || '').toLowerCase()
+  const error = prov.error || (rowState && rowState !== 'ok' && rowState !== 'connected' ? row.unavailable_reason : null)
   return jsxs('section', {
     style: { display: 'grid', gap: 3, paddingTop: 10, borderTop: HAIRLINE },
     children: [
-      jsx(SectionLabel, { aside: `${prov.endpoint_host || ''}`, children: 'Data source' }, 'label'),
+      jsx(SectionLabel, { aside: prov.endpoint_host ? `Destination ${prov.endpoint_host}` : null, children: 'Data source' }, 'label'),
       jsx('span', {
         style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' },
-        children: `${source} ${prov.definition_id} v${prov.definition_version}${override}`
+        children: `${source} ${prov.definition_id || 'definition'}${version}${override}`
       }, 'definition'),
+      credentialRefs.length > 0
+        ? jsx('span', {
+            style: { ...textSecondary, fontSize: 10, lineHeight: 1.5 },
+            children: `Credentials: ${credentialRefs.map(ref => ref.label).join(' · ')}`
+          }, 'credentials')
+        : null,
       jsx('span', {
-        style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' },
+        style: { ...textSecondary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' },
         children: [
           cache,
           ageText,
-          `TTL ${prov.ttl_seconds || 0}s`,
+          prov.ttl_seconds != null ? `TTL ${prov.ttl_seconds}s` : null,
           `scope ${prov.scope || 'active'}`,
           prov.definition_file ? prov.definition_file : null
         ].filter(Boolean).join(' · ')
       }, 'freshness'),
       prov.docs_url
         ? jsx('span', {
-            style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' },
+            style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' },
             children: prov.docs_url
           }, 'docs')
         : null,
       error
-        ? jsx('span', { style: { ...textTertiary, fontSize: 10, lineHeight: 1.45, color: 'var(--ui-orange)' }, children: error }, 'error')
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, color: 'var(--ui-orange)' }, children: error }, 'error')
         : null
     ]
   })
@@ -1383,7 +1658,7 @@ function AllProviderMetrics({ row, complete = false }) {
               jsx(SectionLabel, { aside: product.kind === 'subscription' ? 'Subscription' : 'API credits', children: product.label }),
               product.available
                 ? jsx(AllProviderMetrics, { row: { ...product, id: `${row.id}-${product.id}`, products: [] } })
-                : jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: product.unavailable_reason || 'This product does not expose usage data.' })
+                : jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: product.unavailable_reason || 'This product does not expose usage data.' })
             ]
           }, `${row.id}-${product.id}`)
         ),
@@ -1405,7 +1680,7 @@ function AllProviderMetrics({ row, complete = false }) {
       jsx(BreakdownPanel, { row }),
       row?.reset_credits
         ? jsx('span', {
-            style: { ...textTertiary, fontSize: 11, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' },
+            style: { ...textSecondary, fontSize: 11, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' },
             children: `Banked resets: ${row.reset_credits.available ?? 0} saved, ${row.reset_credits.applicable ?? 0} usable now`
           })
         : null,
@@ -1446,9 +1721,13 @@ function ActiveProvider({ row, model }) {
   const fundingDetail = codexFallback
     ? `${money(state.balance)} extra usage available for the next request`
     : state.kind === 'subscription'
-      ? `${plan} subscription allowance`
+      ? row?.definition
+        ? `${plan} · read-only definition`
+        : `${plan} subscription allowance`
       : state.kind === 'balance'
-        ? 'Requests are billed from this provider balance.'
+        ? row?.definition
+          ? `${plan} · read-only definition`
+          : 'Requests are billed from this provider balance.'
         : row?.unavailable_reason || 'No usage data is exposed.'
 
   return jsxs('section', {
@@ -1474,7 +1753,7 @@ function ActiveProvider({ row, model }) {
                 ]
               }),
               jsx('div', {
-                style: { ...textTertiary, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                style: { ...textSecondary, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
                 children: model || 'Active model unavailable'
               })
             ]
@@ -1485,11 +1764,11 @@ function ActiveProvider({ row, model }) {
       jsxs('div', {
         style: { borderLeft: '2px solid var(--ui-accent)', marginTop: 15, padding: '2px 0 2px 12px', display: 'grid', gap: 2 },
         children: [
-          jsx('span', { style: { ...textTertiary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.07em' }, children: 'Current request funding' }),
+          jsx('span', { style: { ...textSecondary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.07em' }, children: 'Current request funding' }),
           jsx('strong', { style: { ...textPrimary, fontSize: codexFallback ? 16 : 18, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }, children: fundingHeadline }),
-          jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail }),
+          jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail }),
           row?.id === 'xai-oauth' && legacyPlanNote(row?.plan)
-            ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) })
+            ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) })
             : null
         ]
       }),
@@ -1544,7 +1823,7 @@ function ProviderDisclosure({ row }) {
                     jsx(DefinitionBadge, { row }, 'definition-state')
                   ]
                 }),
-                jsx('span', { style: { ...textQuaternary, paddingLeft: 13, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.plan || (row.capability === 'balance' ? 'API credits' : 'Account usage') })
+                jsx('span', { style: { ...textSecondary, paddingLeft: 13, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.plan || (row.capability === 'balance' ? 'API credits' : 'Account usage') })
               ]
             }),
             jsx('strong', { style: { ...textSecondary, fontSize: 11, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: summary }),
@@ -1583,7 +1862,7 @@ function LimitedProviders({ rows }) {
           textAlign: 'left'
         },
         children: jsxs('span', {
-          style: { display: 'flex', alignItems: 'center', gap: 7, ...textTertiary, fontSize: 11 },
+          style: { display: 'flex', alignItems: 'center', gap: 7, ...textSecondary, fontSize: 11 },
           children: [jsx(open ? icons.ChevronDown : icons.ChevronRight, { 'aria-hidden': true, style: { width: 13, height: 13 } }, 'chevron'), jsx('span', { children: `Limited data (${rows.length})` }, 'label')]
         })
       }),
@@ -1595,7 +1874,7 @@ function LimitedProviders({ rows }) {
                 style: { display: 'grid', gap: 2 },
                 children: [
                   jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 500 }, children: row.label }),
-                  jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.4 }, children: row.unavailable_reason || 'This provider does not expose usage or balance data.' })
+                  jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.4 }, children: row.unavailable_reason || 'This provider does not expose usage or balance data.' })
                 ]
               }, row.id)
             )
@@ -1730,6 +2009,14 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
           query,
           backendGone,
           provider: provider || row?.id,
+          sessionId,
+          // `subagent.list` is owner-checked against the socket that commissioned
+          // the child. Only the active gateway can prove that here; a chat whose
+          // backend is another profile/connection gets no footer rather than a
+          // foreign roster (see docs/running-agents-footer.md).
+          active: popoverOpen && scope.source === 'active',
+          gateway,
+          providerRows: matched?.providers,
           onRequestClose: () => setPopoverOpen(false)
         })
       })
@@ -1737,7 +2024,7 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   })
 }
 
-function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, provider, onRequestClose }) {
+function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, provider, sessionId, active, gateway, providerRows, onRequestClose }) {
   // Compact current-provider detail popover. Shows only the ACTIVE provider's
   // extra details (its windows, reset, balance), plus a way to open the full
   // page. Respects the same divergence/back-end state as the chip.
@@ -1758,13 +2045,26 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
     ]
   })
 
+  // Running children are a gateway fact, independent of whether this profile
+  // exposes provider usage, so the footer is offered in every popover state
+  // (it hides itself when nothing is running). `active` is already gated to the
+  // active source by the chip body.
+  const runningAgents = jsx(RunningAgentsFooter, {
+    sessionId,
+    active,
+    gateway,
+    sourceId: scope.sourceId,
+    providerRows
+  }, 'running-agents')
+
   if (backendGone) {
     return jsxs('div', {
       style: { display: 'grid', gap: 12, padding: 16 },
       children: [
         jsx('div', { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 15, height: 15, color: 'var(--ui-text-tertiary)' } }, 'icon'), jsx('strong', { style: { ...textPrimary, fontSize: 12, fontWeight: 600 }, children: `Not enabled in ${scope.fetchProfile}` }, 'title')] }),
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in that profile to see usage. Hermes never edits profiles automatically.' }),
-        viewAll
+        jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in that profile to see usage. Hermes never edits profiles automatically.' }),
+        viewAll,
+        runningAgents
       ]
     })
   }
@@ -1774,8 +2074,9 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
     return jsxs('div', {
       style: { display: 'grid', gap: 12, padding: 16 },
       children: [
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: waiting ? 'Checking which account this chat is using…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
-        viewAll
+        jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: waiting ? 'Checking which account this chat is using…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
+        viewAll,
+        runningAgents
       ]
     })
   }
@@ -1834,7 +2135,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
               jsx('strong', { style: { ...textPrimary, fontSize: 13, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label }, 'label'),
               planLabel ? jsx(Badge, { variant: 'outline', size: 'xs', children: planLabel }, 'plan') : null
             ] }),
-            jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [model, scope.fetchProfile !== scope.activeProfile ? scope.fetchProfile : null].filter(Boolean).join(' · ') || scope.fetchProfile }, 'model')
+            jsx('span', { style: { ...textSecondary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [model, scope.fetchProfile !== scope.activeProfile ? scope.fetchProfile : null].filter(Boolean).join(' · ') || scope.fetchProfile }, 'model')
           ] }, 'identity'),
           refreshButton
         ]
@@ -1843,7 +2144,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
         style: { display: 'grid', gap: 13, padding: '13px 14px 12px' },
         children: [
           row?.id === 'xai-oauth' && legacyPlanNote(row?.plan)
-            ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) }, 'plan-lag')
+            ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) }, 'plan-lag')
             : null,
           codexFallback
             ? jsxs('div', {
@@ -1871,7 +2172,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
             ? jsx(KeyUsagePanel, { keyUsage: row.key_usage, compact: true }, 'key-usage')
             : null,
           !codexFallback && limitWindows.length === 0 && !balance && !row?.activity
-            ? jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: row?.available ? 'No usage windows or balance are reported for this provider.' : (row?.unavailable_reason || 'Usage unavailable.') }, 'empty')
+            ? jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: row?.available ? 'No usage windows or balance are reported for this provider.' : (row?.unavailable_reason || 'Usage unavailable.') }, 'empty')
             : null,
           row?.activity
             ? jsx(ActivityPanel, { activity: row.activity, compact: true }, 'activity')
@@ -1886,8 +2187,9 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
             style: { display: 'grid', gap: 8, borderTop: HAIRLINE, paddingTop: 11, marginTop: 1 },
             children: [
               viewAll,
+              runningAgents,
               updated
-                ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }, children: `Updated ${updated}` }, 'updated')
+                ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }, children: `Updated ${updated}` }, 'updated')
                 : null
             ]
           }, 'footer')
@@ -1898,50 +2200,141 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
 }
 
 function catalogStateMeta(entry) {
-  const state = String(entry?.state || '')
+  const state = String(entry?.state || '').toLowerCase()
+  // Only an explicit connected state is green. Available/ready mean setup, not
+  // a live account; unknown and blocked states stay neutral/negative.
+  if (state === 'connected' || state === 'ok') return { label: 'Connected', variant: 'success' }
   if (state === 'available') return { label: 'Available to connect', variant: 'outline' }
-  if (state === 'ready') return { label: 'Ready to read', variant: 'success' }
+  if (state === 'ready') return { label: 'Ready to read', variant: 'outline' }
+  if (state === 'untrusted' || state === 'requires_approval') return { label: 'Approval required', variant: 'warn' }
+  if (state === 'blocked') return { label: 'Blocked', variant: 'destructive' }
   if (state === 'invalid') return { label: 'Invalid definition', variant: 'destructive' }
   if (state === 'unverified') return { label: 'Unverified mapping', variant: 'warn' }
   if (state === 'needs_permission') return { label: 'Permission needed', variant: 'warn' }
   if (state === 'unavailable') return { label: 'Unavailable', variant: 'muted' }
   if (state === 'stale') return { label: 'Stale data', variant: 'warn' }
-  return { label: 'Connected', variant: 'success' }
+  return { label: 'Unknown state', variant: 'muted' }
+}
+
+// Credential references are data: either the upcoming object contract
+// ({source:'env',name} / {source:'hermes_provider',provider,field}) or the
+// legacy missing_credentials string list. Normalize both, but never invent a
+// source type for a legacy label the backend did not classify.
+function credentialRefsOf(entry) {
+  const candidates = [entry?.credential_refs, entry?.setup?.credential_refs]
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue
+    return candidate.map((ref, index) => {
+      if (ref && typeof ref === 'object') {
+        const source = String(ref.source || '').trim().toLowerCase()
+        if (source === 'env') {
+          const name = String(ref.name || '').trim()
+          return name ? { key: name, label: `environment variable ${name}`, type: 'env' } : null
+        }
+        if (source === 'hermes_provider') {
+          const provider = String(ref.provider || '').trim()
+          const field = String(ref.field || 'api_key').trim()
+          return provider
+            ? { key: `${provider}.${field}`, label: `Hermes credential ${provider}.${field}`, type: 'hermes_provider' }
+            : null
+        }
+        return { key: `credential-${index}`, label: 'credential reference (type not reported)', type: 'unknown' }
+      }
+      const text = String(ref || '').trim()
+      return text ? { key: text, label: `credential ${text} (type not reported)`, type: 'unknown' } : null
+    }).filter(Boolean)
+  }
+  return []
+}
+
+function missingCredentialsOf(entry) {
+  const direct = (Array.isArray(entry?.missing_credentials) ? entry.missing_credentials : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+  if (direct.length > 0) return direct
+  // Older catalog payloads only carried the same labels under setup.env.
+  return (Array.isArray(entry?.setup?.env) ? entry.setup.env : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+}
+
+function credentialSummary(entry) {
+  const refs = credentialRefsOf(entry)
+  const missing = missingCredentialsOf(entry)
+  if (refs.length > 0) {
+    const missingKeys = new Set(missing.map(value => value.toLowerCase()))
+    const matchedKeys = new Set()
+    const parts = refs.map(ref => {
+      const key = String(ref.key || '').toLowerCase()
+      if (missingKeys.has(key)) matchedKeys.add(key)
+      return missingKeys.has(key) ? `${ref.label} (missing)` : ref.label
+    })
+    const unmatched = missing.filter(value => !matchedKeys.has(value.toLowerCase()))
+    if (unmatched.length > 0) parts.push(`missing: ${unmatched.join(', ')}`)
+    const needs = ['available', 'not_connected'].includes(String(entry?.state || '').toLowerCase())
+    return `${needs ? 'Needs' : 'Credential'}: ${parts.join(' · ')}`
+  }
+  if (missing.length > 0) {
+    return `Needs ${missing.join(', ')} (credential type not reported by this backend).`
+  }
+  return null
 }
 
 function catalogSetupText(entry) {
   const setup = entry?.setup || {}
-  const missing = Array.isArray(entry?.missing_credentials) ? entry.missing_credentials : []
   const file = setup.file || `${entry?.id || 'definition'}.json`
   const directory = setup.directory || '$HERMES_HOME/provider-usage/providers'
+  const host = String(entry?.host || setup.host || '').trim()
+  const credentials = credentialSummary(entry)
+  const warnings = Array.isArray(entry?.warnings) ? entry.warnings.map(String).filter(Boolean) : []
+  const errors = Array.isArray(entry?.errors) ? entry.errors.map(String).filter(Boolean) : []
+  const approve = String(setup.approve || 'python scripts/approve_definition.py <definition.json>').trim()
   return [
     `Provider Usage definition: ${entry?.name || entry?.id || 'definition'} (${entry?.id || 'unknown'} v${entry?.version || 1})`,
     `Save as: ${directory}/${file}`,
-    missing.length ? `Credentials (environment): ${missing.join(', ')}` : 'No credential required.',
-    Array.isArray(entry?.errors) && entry.errors.length ? `Fix: ${entry.errors.slice(0, 2).join(' | ')}` : 'Validate: python scripts/validate_definition.py <file>',
+    host ? `Destination: ${host}` : null,
+    credentials ? credentials.replace(/^Needs /, 'Credentials: ') : null,
+    errors.length ? `Fix: ${errors.slice(0, 2).join(' | ')}` : 'Validate: python scripts/validate_definition.py <file>',
+    `Approve: ${approve} — review the destination and credential references, then type "approve" at its prompt. Copying or saving does not approve it; this pane never grants trust or fetches data for you.`,
+    warnings.length ? `Warnings: ${warnings.slice(0, 3).join(' | ')}` : null,
     entry?.docs_url ? `Docs: ${entry.docs_url}` : null
   ].filter(Boolean).join('\n')
 }
 
 function CatalogCard({ entry }) {
   const state = catalogStateMeta(entry)
-  const missing = Array.isArray(entry?.missing_credentials) ? entry.missing_credentials : []
   const errors = Array.isArray(entry?.errors) ? entry.errors : []
+  const warnings = Array.isArray(entry?.warnings) ? entry.warnings.map(String).filter(Boolean) : []
   const setup = entry?.setup || {}
   const docs = entry?.docs_url
+  const host = String(entry?.host || setup.host || '').trim()
+  const credentials = credentialSummary(entry)
+  const sourceLabel = entry?.source === 'profile'
+    ? 'Profile'
+    : entry?.source === 'bundled'
+      ? 'Bundled'
+      : 'Source not reported'
+  const stateName = String(entry?.state || '').toLowerCase()
+  const needsApproval = stateName === 'untrusted' || stateName === 'requires_approval'
+  const approvalCommand = String(setup.approve || 'python scripts/approve_definition.py <definition.json>').trim()
+  const stateHelp = needsApproval
+    ? `Approval is a human CLI step: ${approvalCommand}. This pane never grants trust or fetches.`
+    : stateName === 'blocked'
+      ? 'The backend blocks this definition. Nothing is fetched or displayed from it.'
+      : null
   const copy = () => {
     haptic('tap')
     const text = catalogSetupText(entry)
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
         void navigator.clipboard.writeText(text)
-        host.notify({ kind: 'info', message: 'Setup copied. Keep credentials in the environment, never in the JSON.' })
+        host.notify({ kind: 'info', message: 'Setup copied — approve it yourself in the Hermes CLI. This pane never grants trust or fetches. Keep credentials out of the JSON.' })
         return
       }
     } catch {
       // Fall through to a plain notice when the clipboard is unavailable.
     }
-    host.notify({ kind: 'info', message: 'Copy the setup from the definition docs; credentials stay in the environment.' })
+    host.notify({ kind: 'info', message: 'Copy the setup from the definition docs; credentials stay in the environment. Approval is a separate human CLI step.' })
   }
   return jsxs('div', {
     style: { border: '1px solid var(--ui-stroke-tertiary)', borderRadius: 8, background: 'var(--ui-bg-card)', padding: '11px 13px', display: 'grid', gap: 5 },
@@ -1950,33 +2343,48 @@ function CatalogCard({ entry }) {
         style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', minWidth: 0 },
         children: [
           jsx('span', { style: { ...textPrimary, fontSize: 12, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry?.name || entry?.id || 'Definition' }, 'name'),
-          jsx(Badge, { variant: state.variant, size: 'xs', children: state.label }, 'state'),
-          jsx(Badge, { variant: entry?.source === 'profile' ? 'outline' : 'muted', size: 'xs', children: entry?.source === 'profile' ? 'Profile' : 'Bundled' }, 'source'),
+          jsx(Badge, { variant: state.variant, size: 'xs', style: state.variant === 'outline' || state.variant === 'muted' ? { color: 'var(--ui-text-secondary)' } : undefined, children: state.label }, 'state'),
+          jsx(Badge, { variant: 'outline', size: 'xs', style: { color: 'var(--ui-text-secondary)' }, children: sourceLabel }, 'source'),
           entry?.stability === 'experimental' ? jsx(Badge, { variant: 'warn', size: 'xs', children: 'Experimental' }, 'stability') : null
         ]
       }),
       entry?.description
-        ? jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: entry.description }, 'description')
+        ? jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: entry.description }, 'description')
         : null,
-      jsxs('span', {
-        style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' },
+      jsx('span', {
+        style: { ...textSecondary, fontSize: 10, lineHeight: 1.5, fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' },
         children: [
-          entry?.host || null,
           entry?.version ? `v${entry.version}` : null,
           setup.file || null,
-          entry?.last_error || null
+          !needsApproval && entry?.last_error ? entry.last_error : null
         ].filter(Boolean).join(' · ')
       }, 'meta'),
-      missing.length
-        ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45 }, children: `Needs ${missing.join(', ')} in the environment (never in the JSON).` }, 'missing')
-        : entry?.state === 'invalid'
-          ? jsx('span', { style: { ...textQuaternary, fontSize: 10.5, lineHeight: 1.45 }, children: 'Fix the validation errors below, then refresh.' }, 'invalid-help')
-          : jsx('span', { style: { ...textQuaternary, fontSize: 10.5, lineHeight: 1.45 }, children: 'No credential required for this definition.' }, 'no-credential'),
+      host || credentials
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 1, paddingTop: 1 },
+            children: [
+              host ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: `Destination: ${host}` }, 'destination') : null,
+              credentials ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: credentials }, 'credentials') : null
+            ]
+          }, 'request')
+        : null,
+      stateHelp
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45 }, children: stateHelp }, 'state-help')
+        : stateName === 'invalid'
+          ? jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.45 }, children: 'Fix the validation errors below, then refresh.' }, 'invalid-help')
+          : null,
+      warnings.length > 0
+        ? jsx('span', {
+            title: warnings.join('\n'),
+            style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, overflowWrap: 'anywhere' },
+            children: `Warnings: ${warnings.slice(0, 3).join(' · ')}${warnings.length > 3 ? ` · +${warnings.length - 3} more` : ''}`
+          }, 'warnings')
+        : null,
       errors.length > 0
         ? jsxs('div', {
             style: { display: 'grid', gap: 2, paddingTop: 2 },
             children: errors.slice(0, 3).map((error, index) =>
-              jsx('span', { style: { ...textTertiary, fontSize: 10, lineHeight: 1.4, color: 'var(--dt-destructive)', overflowWrap: 'anywhere' }, children: String(error) }, `error-${index}`)
+              jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.4, color: 'var(--dt-destructive)', overflowWrap: 'anywhere' }, children: String(error) }, `error-${index}`)
             )
           }, 'errors')
         : null,
@@ -1988,10 +2396,10 @@ function CatalogCard({ entry }) {
             variant: 'secondary',
             size: 'xs',
             onClick: copy,
-            children: 'Copy setup'
+            children: 'Copy setup steps'
           }, 'copy'),
           docs
-            ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere', minWidth: 0 }, children: docs }, 'docs')
+            ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere', minWidth: 0 }, children: docs }, 'docs')
             : null
         ]
       })
@@ -2002,28 +2410,35 @@ function CatalogCard({ entry }) {
 function CatalogSection({ catalog }) {
   if (!catalog || !Array.isArray(catalog.definitions)) return null
   const definitions = catalog.definitions
-  const pending = definitions.filter(entry => entry?.state !== 'connected')
-  const connected = definitions.length - pending.length
-  const availableCount = definitions.filter(entry => entry?.state === 'available').length
-  const readyCount = definitions.filter(entry => entry?.state === 'ready').length
-  const invalidCount = definitions.filter(entry => entry?.state === 'invalid').length
+  const stateOf = entry => String(entry?.state || '').toLowerCase()
+  const isConnected = entry => stateOf(entry) === 'connected' || stateOf(entry) === 'ok'
+  const pending = definitions.filter(entry => !isConnected(entry))
+  // Never count an unknown/missing state as connected.
+  const connectedCount = definitions.filter(isConnected).length
+  const availableCount = definitions.filter(entry => stateOf(entry) === 'available').length
+  const readyCount = definitions.filter(entry => stateOf(entry) === 'ready').length
+  const untrustedCount = definitions.filter(entry => stateOf(entry) === 'untrusted' || stateOf(entry) === 'requires_approval').length
+  const blockedCount = definitions.filter(entry => stateOf(entry) === 'blocked').length
+  const invalidCount = definitions.filter(entry => stateOf(entry) === 'invalid').length
   const setupSummary = [
     availableCount > 0 ? `${availableCount} to connect` : null,
     readyCount > 0 ? `${readyCount} ready` : null,
+    untrustedCount > 0 ? `${untrustedCount} approval required` : null,
+    blockedCount > 0 ? `${blockedCount} blocked` : null,
     invalidCount > 0 ? `${invalidCount} invalid` : null,
-    `${connected} connected`
+    `${connectedCount} connected`
   ].filter(Boolean).join(' · ')
   const directory = catalog.directory || '$HERMES_HOME/provider-usage/providers'
   return jsxs('section', {
-    'aria-labelledby': 'provider-usage-catalog-heading',
+    'aria-label': 'Provider definitions',
     style: { padding: '15px 18px 18px', borderTop: HAIRLINE },
     children: [
       jsx(SectionTitle, {
         aside: definitions.length > 0 ? setupSummary : null,
-        children: 'Available to connect'
+        children: 'Provider definitions'
       }, 'title'),
       jsx('span', {
-        style: { ...textTertiary, fontSize: 10.5, lineHeight: 1.5, paddingTop: 4 },
+        style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5, paddingTop: 4 },
         children: 'Read-only JSON definitions. No scripts, no eval, and never a credential value in the file.'
       }, 'intro'),
       pending.length > 0
@@ -2032,13 +2447,13 @@ function CatalogSection({ catalog }) {
             children: pending.map(entry => jsx(CatalogCard, { entry }, entry.id))
           }, 'cards')
         : jsx('div', {
-            style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, paddingTop: 10 },
+            style: { ...textSecondary, fontSize: 11, lineHeight: 1.5, paddingTop: 10 },
             children: definitions.length > 0
               ? 'All catalog definitions are connected. Add another JSON file to extend the list.'
               : 'No declarative definitions yet. Add a JSON file to the folder below, then refresh.'
           }, 'empty'),
       jsxs('div', {
-        style: { ...textQuaternary, fontSize: 9, lineHeight: 1.5, paddingTop: 12, overflowWrap: 'anywhere' },
+        style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.5, paddingTop: 12, overflowWrap: 'anywhere' },
         children: [
           jsx('span', { children: `Folder: ${directory}` }, 'folder'),
           jsx('span', { children: ' · Template: dashboard/definitions/TEMPLATE.json' }, 'template')
@@ -2072,7 +2487,7 @@ function GatedUsagePage({ scope }) {
     children: [
       jsxs('div', { style: { minWidth: 0, display: 'grid', gap: 2 }, children: [
         jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }),
-        jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Scope ${scope.fetchProfile} · focused ${scope.focusProfile}` })
+        jsx('span', { style: { ...textSecondary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Scope ${scope.fetchProfile} · focused ${scope.focusProfile}` })
       ] })
     ]
   })
@@ -2081,7 +2496,7 @@ function GatedUsagePage({ scope }) {
     children: [
       jsx(StatusDot, { tone: 'warn', style: { width: 12, height: 12 } }),
       jsx('strong', { style: { ...textSecondary, fontSize: 13, fontWeight: 600 }, children: scope.ambiguous ? 'Account scope could not be identified' : `${scope.focusProfile} is on another connection` }),
-      jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, maxWidth: 340 }, children: scope.ambiguous
+      jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5, maxWidth: 340 }, children: scope.ambiguous
         ? 'The focused chat did not resolve to one account. Provider usage is hidden rather than guessed.'
         : 'This gateway can read provider accounts for profiles on this machine. It cannot read that connection.' })
     ]
@@ -2134,7 +2549,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
         style: { minWidth: 0, display: 'grid', gap: 2 },
         children: [
           jsx('h1', { style: { ...textPrimary, margin: 0, fontSize: 13, lineHeight: 1.35, fontWeight: 650 }, children: 'Provider usage' }, 'title'),
-          jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: scopeSubtitle }, 'subtitle')
+          jsx('span', { style: { ...textSecondary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: scopeSubtitle }, 'subtitle')
         ]
       }, 'title-block'),
       jsx('div', { children: refreshButton }, 'refresh')
@@ -2169,7 +2584,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
       children: [
         jsx(StatusDot, { tone: 'warn', style: { width: 10, height: 10 } }, 'dot'),
         jsx('strong', { style: { ...textSecondary, fontSize: 12, fontWeight: 600 }, children: 'Reconnecting' }, 'title'),
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: `Provider usage for ${scope.fetchProfile} will load when the connection is ready.` }, 'hint')
+        jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: `Provider usage for ${scope.fetchProfile} will load when the connection is ready.` }, 'hint')
       ]
     })
   } else if (!switching && ready && query.isLoading && !hasRows) {
@@ -2181,12 +2596,12 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
         ? [
             jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }, 'icon'),
             jsx('strong', { children: `Provider usage isn't enabled or installed in ${scope.fetchProfile}` }, 'title'),
-            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in the profile to see provider usage here. Hermes never edits profiles automatically.' }, 'hint')
+            jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in the profile to see provider usage here. Hermes never edits profiles automatically.' }, 'hint')
           ]
         : [
             jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 22, height: 22, color: 'var(--ui-text-tertiary)' } }, 'icon'),
             jsx('strong', { children: `Provider data for ${scope.fetchProfile} could not be loaded` }, 'title'),
-            jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }, 'hint'),
+            jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: 'The Hermes backend may need to reload this plugin.' }, 'hint'),
             jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', onClick: () => void query.refetch(), children: 'Try again' }, 'retry')
           ]
     })
@@ -2206,15 +2621,15 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
               style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingBottom: 6 },
               children: [
                 jsx('h2', { id: 'provider-usage-accounts-heading', style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Other providers' }, 'heading'),
-                jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: `${available.length} reporting` }, 'count')
+                jsx('span', { style: { ...textSecondary, fontSize: 10 }, children: `${available.length} reporting` }, 'count')
               ]
             }, 'accounts-header'),
             available.length > 0
               ? jsx('div', { style: { display: 'grid', gap: 8 }, children: available.map(row => jsx(ProviderDisclosure, { row }, row.id)) }, 'account-cards')
-              : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }, 'empty-accounts'),
+              : jsx('div', { style: { ...textSecondary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }, 'empty-accounts'),
             jsx(LimitedProviders, { rows: limited }, 'limited'),
             jsx('footer', {
-              style: { ...textQuaternary, fontSize: 9, lineHeight: 1.45, paddingTop: 14 },
+              style: { ...textSecondary, fontSize: 9, lineHeight: 1.45, paddingTop: 14 },
               children: `Credentials stay in Hermes. This pane receives balances, percentages, plan names, and reset times only.`
             }, 'footer')
           ]
@@ -2230,7 +2645,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   })
 }
 
-export { CatalogSection, DefinitionBadge, DefinitionPanel, activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { CatalogSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

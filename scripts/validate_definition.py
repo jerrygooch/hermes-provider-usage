@@ -57,15 +57,19 @@ def main() -> int:
     for path in expanded:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            print(f"{path}: cannot read JSON: {exc}", file=sys.stderr)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            print(f"{path}: cannot read JSON: {type(exc).__name__}", file=sys.stderr)
             failed = True
-            results.append({"file": str(path), "ok": False, "errors": [f"file: {exc}"]})
+            results.append({"file": str(path), "ok": False, "errors": [f"file: {type(exc).__name__}"]})
             continue
+        try:
+            bundled = path.resolve().parent == backend._definition_bundled_dir().resolve()
+        except OSError:
+            bundled = False
         definition, errors, warnings = backend._validate_definition(
             raw,
-            source="profile",
-            allow_override=True,
+            source="bundled" if bundled else "profile",
+            allow_override=not bundled,
         )
         result = {
             "file": path.name,
@@ -76,10 +80,9 @@ def main() -> int:
             "name": (definition or {}).get("name") or raw.get("name") if isinstance(raw, dict) else None,
             "version": (definition or {}).get("version"),
             "host": backend._definition_endpoint_host(definition) if definition else None,
-            "credential_refs": [
-                backend._credential_label(spec["credential"])
-                for spec in (definition or {}).get("request", {}).get("headers", [])
-            ],
+            "credential_refs": backend._definition_credential_refs(definition) if definition else [],
+            "credential_labels": backend._definition_credential_labels(definition) if definition else [],
+            "requires_approval": bool(definition) and not bundled,
         }
         results.append(result)
         failed = failed or not result["ok"]

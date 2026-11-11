@@ -57,9 +57,17 @@ const EXPECT = {
   },
   'declarative-catalog': {
     registeredName: 'Provider Usage',
-    needles: ['GitHub API rate limit', 'Core', 'Available to connect', 'MOONSHOT_API_KEY', 'No scripts, no eval', 'mapping.windows[0].label', 'Definition'],
+    needles: ['GitHub API rate limit', 'Core', 'Available to connect', 'MOONSHOT_API_KEY', 'No scripts, no eval', 'mapping.windows[0].label', 'Connected', 'read-only definition'],
+    forbidden: ['Rate limit subscription allowance', 'Subscription renewal date is not exposed'],
     chipNeedle: 'GitHub',
     chipGovern: 'Core'
+  },
+  'declarative-honesty': {
+    registeredName: 'Provider Usage',
+    needles: ['Example balance provider', '12.50', 'currency not reported', 'Granted by support on Nov 1.', 'Approval required', 'python scripts/approve_definition.py', 'Hermes credential moonshot.api_key', 'Destination: api.example.com', 'Blocked', 'Unknown state', 'Needs LEGACY_API_KEY', 'is not an array, so no windows were read.', 'read-only definition'],
+    forbidden: ['$12.50', 'Subscription renewal date is not exposed', 'No credential required for this definition.'],
+    chipNeedle: 'Example',
+    chipGovern: '12.50'
   }
 }
 
@@ -103,12 +111,14 @@ for (const label of labels) {
   const okName = e.registered?.name === expected.registeredName
   const text = (e.text || '') + '\n' + (e.chipText || '')
   const missingNeedles = expected.needles.filter(n => !text.includes(n))
+  const forbiddenHits = (expected.forbidden || []).filter(n => text.includes(n))
   const badChip = !cleanRun && expected.chipNeedle && !(e.chipText || '').includes(expected.chipNeedle)
   const accent = e.geometry?.resolvedVars?.accent
   const destructive = e.geometry?.resolvedVars?.destructive
 
   if (!okName) problems.push(`registered name ≠ ${expected.registeredName}`)
   if (missingNeedles.length) problems.push(`missing text: ${missingNeedles.join(', ')}`)
+  if (forbiddenHits.length) problems.push(`forbidden text present: ${forbiddenHits.join(', ')}`)
   if (badChip) problems.push(`chip missing ${expected.chipNeedle}`)
   // A themed capture (--theme) paints the real desktop theme's tokens instead
   // of the stylesheet defaults; those resolved values are the theme's, not the

@@ -77,34 +77,41 @@ Three definitions ship in the catalog:
 - **Moonshot / Kimi balance** — prepaid balance; references `MOONSHOT_API_KEY`.
 - **ElevenLabs subscription** — character allowance and reset; references `ELEVENLABS_API_KEY`.
 
-The page lists connected definitions, **Available to connect** entries that name the missing environment variable, and **Invalid definition** entries with the exact validation error. Missing mapped values stay **Unavailable** and are never shown as zero.
+The page lists connected definitions, **Available to connect** entries that name the missing environment variable, **Requires approval** entries for profile-local files, **Blocked** entries whose approval no longer matches, and **Invalid definition** entries with the exact validation error. Missing mapped values stay **Unavailable** and are never shown as zero.
 
 To add one:
 
 1. Copy `dashboard/definitions/TEMPLATE.json` to `$HERMES_HOME/provider-usage/providers/<id>.json` (for a named profile: `$HERMES_HOME/profiles/<profile>/provider-usage/providers/`).
-2. Use a documented HTTPS endpoint, list its host in `request.hosts`, and reference credentials instead of embedding them.
+2. Use a documented HTTPS endpoint, list its host in `request.hosts`, and reference environment variables instead of embedding credentials.
 3. Map JSON paths into windows or balances. Supported window kinds are 5-hour, daily, weekly, monthly, rolling, and custom; values can be percent, requests, tokens, characters, USD, credits, or custom units.
-4. Validate locally, then refresh the page:
+4. Validate locally, then approve the exact file for this Hermes home:
 
 ```bash
 python scripts/validate_definition.py ~/.hermes/provider-usage/providers/my-api.json
+python scripts/approve_definition.py ~/.hermes/provider-usage/providers/my-api.json
 ```
 
-A profile definition that reuses a bundled id is rejected unless it sets `"override": true`, and ids reserved by built-in adapters are refused. See [dashboard/definitions/README.md](dashboard/definitions/README.md) for the schema reference, collision rules, and safety boundaries.
+The approval command shows the destination and every credential reference, reads no secret, and requires you to type `approve`. It writes `$HERMES_HOME/provider-usage/approvals.json`, outside the definitions directory. Editing the definition changes its fingerprint and revokes the approval (**Blocked** until you review and approve it again). Nothing in a definition or in the packager can approve itself.
+
+A profile definition that reuses a bundled id is rejected unless it sets `"override": true`, and ids reserved by built-in adapters are refused. See [dashboard/definitions/README.md](dashboard/definitions/README.md) for the schema reference, approval rules, and safety boundaries.
 
 ### What the definition boundary allows
 
 - **HTTPS GET only**, default port, no query string or credentials in the URL, exact host allow-list, no redirects. An authorization header is therefore never forwarded to another host.
-- **Public DNS only** — loopback, private, link-local, reserved, and multicast addresses are refused before the request. Proxy and `.netrc` discovery are disabled so the checked peer is the real peer.
-- **Bounded response** — 512 KiB cap, 10-second read timeout, JSON content-type check.
-- **Credential references**, resolved in the backend from the profile environment or an existing Hermes provider entry. The renderer receives labels, numbers, states, and provenance — never a key, token, or raw response.
-- **Data-only dot paths**, strict unknown-key rejection, and a 30–86,400 second cache TTL. The last good row can be shown as **Stale data** with the failure attached.
+- **Pinned public peer** — the backend resolves the host once under a 3-second bound, rejects the whole answer if any address is loopback, private, link-local, reserved, multicast, NAT64, or IPv4-mapped, then connects to the vetted IP while keeping TLS SNI and the `Host` header set to the definition's hostname. A second DNS answer cannot move the connection. Proxy and `.netrc` discovery are disabled.
+- **Bounded response** — 512 KiB cap, 10-second per-read timeout, and a 20-second wall-clock budget checked across DNS and streaming.
+- **Credential references** resolved only through Hermes' profile-scoped `agent.secret_scope.get_secret`; the renderer receives labels, numbers, states, and provenance — never a key, token, or raw response. There is no `os.environ` fallback. `hermes_provider` references are rejected with an explicit "not supported yet" error; reusing a provider credential needs a code-owned adapter.
+- **Data-only dot paths**, strict unknown-key rejection, and a 30–86,400 second cache TTL. Cache keys and provenance are scoped by the effective canonical Hermes home, not the word `active`. The last good row can be shown as **Stale data** with the failure attached. Unmapped rows are omitted with a warning, and an unresolved currency is `UNKNOWN`, never assumed USD.
+
+### Trust model (honest)
+
+Approval is a **local-user consent boundary**, not a sandbox. Code running as the same OS user can edit both the definition and `approvals.json`; it can also read the profile's credentials directly. The gate exists so a definition that arrives from a pack, an update, or another tool cannot send a profile secret to an unreviewed host without a human seeing the destination and references first. It does not defend against malicious same-user code, a compromised Hermes process, or an attacker who can already write the profile directory.
 
 Complex protocols still need a Python adapter: OAuth refresh, gRPC, HTML scraping, write operations, and multi-step requests are intentionally out of scope.
 
 ### Prepare a portable definition
 
-The packaging script validates, canonicalizes, and rejects secret-looking values and machine-local paths. It writes a small package under `dist/contributions/<id>/` and never calls GitHub:
+The packaging script validates, canonicalizes, and rejects secret-looking values and machine-local paths. It writes a small package under `dist/contributions/<id>/` and never calls GitHub. A package never contains an approval record and does not approve anything on install; the receiving user must run `scripts/approve_definition.py` locally.
 
 ```bash
 python scripts/package-definition.py ~/.hermes/provider-usage/providers/my-api.json
@@ -139,6 +146,12 @@ cp dashboard/plugin_api.py dashboard/manifest.json \
   "$HERMES_HOME/plugins/provider-usage/dashboard/"
 cp -R dashboard/definitions "$HERMES_HOME/plugins/provider-usage/dashboard/"
 cp -R dashboard/dist "$HERMES_HOME/plugins/provider-usage/dashboard/"
+
+# The local approval/validation commands ship beside the backend so an
+# installed copy can approve profile-local definitions without a source tree.
+mkdir -p "$HERMES_HOME/plugins/provider-usage/scripts"
+cp scripts/approve_definition.py scripts/validate_definition.py \
+  "$HERMES_HOME/plugins/provider-usage/scripts/"
 ```
 
 Check the current plugin allow-list first:

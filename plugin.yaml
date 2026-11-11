@@ -1,0 +1,31 @@
+name: provider-usage
+version: "0.10.0"
+description: >-
+  Subscription-aware provider usage and balance page, status-bar chip, and
+  profile-scoped backend for Hermes Desktop, plus declarative read-only
+  provider definitions.
+author: Jerry Gooch
+license: MIT
+homepage: https://github.com/jerrygooch/hermes-provider-usage
+manifest_version: 2
+# Host feature dependency (recorded honestly):
+# This build reads every provider through the public provider-usage core seam:
+#   * 622eb3219f — read-only fetch_account_usage for the built-in providers,
+#     exact provider bodies on snapshot.raw, list_account_usage_identities and
+#     provider_credential_summary (non-secret account namespace/presence);
+#   * a4c484eb5d — delegation publishes the resolved provider and the same
+#     non-secret account id for running children.
+# No Hermes release contains those commits at the time of this candidate, so
+# there is deliberately NO requires_hermes release floor: >=0.23.1 would be
+# false and a newer number would be invented. An older host loads the plugin and
+# each adapter reports an explicit upgrade-required row; there is no raw
+# runtime-key or credential-store fallback.
+requires_auth:
+  - openai-codex
+  - xai-oauth
+capabilities: []
+optional_env:
+  - name: MOONSHOT_API_KEY
+    description: Optional key for the bundled Moonshot / Kimi balance definition.
+  - name: ELEVENLABS_API_KEY
+    description: Optional key for the bundled ElevenLabs subscription definition.
