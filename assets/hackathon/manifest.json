@@ -2,9 +2,9 @@
   "schema": "hermes.provider-usage.hackathon-assets/1",
   "title": "Provider Usage \u2014 hackathon visual and documentation package",
   "plugin_version": "0.10.0",
-  "source_commit": "fd895ea",
+  "source_commit": "994c954",
   "source_tree_dirty": false,
-  "generated_at": "2026-11-11T19:52:53.471285+00:00",
+  "generated_at": "2026-11-11T20:15:37.078272+00:00",
   "capture_kind": "browser component harness (real desktop/plugin.js + real SDK primitives + real built-in theme); not the packaged desktop app",
   "theme": {
     "name": "nous",
@@ -106,8 +106,8 @@
       "state": "Popover footer \u00b7 verified pool and unknown account",
       "width": 808,
       "height": 720,
-      "bytes": 53766,
-      "sha256": "fa910fc805856c2de7802a5b7dae10c5cd856d23a59bb291c520d55e8e1b6785",
+      "bytes": 53546,
+      "sha256": "ed8aef0d82f57bade1f177c7ecdd06f9e927a96fed193d955513d1e6f23c9126",
       "caption": "The footer attributes only what the gateway can prove. A child with a matching account shows the shared pool (5h 62%); a mismatched or missing account shows an em dash instead of borrowing another account\u2019s balance.",
       "sample_data": true,
       "capture": {
@@ -162,8 +162,8 @@
       "state": "Expanded metrics \u00b7 activity, cache, rates, pool breakdown",
       "width": 1520,
       "height": 2272,
-      "bytes": 173509,
-      "sha256": "a0a0e19d85586ff2e53e941abd7a4149e95b744d2375df8419c7a963403e2ce9",
+      "bytes": 173899,
+      "sha256": "929fed89bdd7e0e8b9fb6d637d48a7593fa227522cfe3d179eb8d9bd414f4d6d",
       "caption": "When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, published token rates, and the shared-pool breakdown. Not every provider returns every field.",
       "sample_data": true,
       "capture": {
@@ -348,8 +348,8 @@
       "state": "Codex reset \u00b7 read-only summary",
       "width": 1520,
       "height": 2487,
-      "bytes": 203276,
-      "sha256": "d3d4a3f5811b07289f0d9e251d568957e5dac2711a16134171cc923b7c707f82",
+      "bytes": 203656,
+      "sha256": "2c0647c10427a461c80c0c4d2e191546e2335e418d4c9aa124c6aa83d060dea2",
       "caption": "The stock-native reset panel reads the active Codex account only. This is a fixture summary: 2 banked resets, 1 usable now, with provider-reported inventory. No reset was redeemed.",
       "sample_data": true,
       "capture": {
@@ -374,8 +374,8 @@
       "state": "Codex reset \u00b7 confirmation preview, not executed",
       "width": 1520,
       "height": 2625,
-      "bytes": 220410,
-      "sha256": "0261c7a64a1e0c12341ddf029d9bc2aa775e4a4878d918a807217ebf38f87f48",
+      "bytes": 220835,
+      "sha256": "485580cb6f529f0294d049ac92e3bbc7e9adba07d7451955fd1376cef42a5ac7",
       "caption": "Preview/confirm is separately gated. This fixture stops at the confirmation preview; the confirm button is visible but was never clicked, and no reset was redeemed.",
       "sample_data": true,
       "capture": {
@@ -405,19 +405,19 @@
   "gallery": {
     "file": "gallery.html",
     "bytes": 16140,
-    "sha256": "41361db5bf4d3dbbd0b962ef1e097782da216abf10aa746912883bc3c9822579"
+    "sha256": "964b6d686abea1c7ea88b1541cef008371d608557ad98f9ecc999bf6be41aae8"
   },
   "video": {
     "file": "demo-full.mp4",
-    "bytes": 4667189,
-    "sha256": "3bd8ceddb7598dd53e7b4b4cff71dbd71de2d49f749b15db503abd47faf757eb",
+    "bytes": 4681841,
+    "sha256": "91e180030897194c72889d9b4954e883e7e73dbd62ce080c9833d384d9ae96d5",
     "label": "Real plugin interaction demo in the component harness; synthetic sample data; not the packaged desktop app. No reset redeemed.",
     "sample_data": true,
     "width": 1920,
     "height": 1080,
     "codec": "h264",
     "fps": "30/1",
-    "duration_seconds": 83.23,
+    "duration_seconds": 83.4,
     "audio_streams": 0,
     "poster": "demo-full-poster.png"
   },
@@ -425,8 +425,8 @@
     "file": "demo-full-poster.png",
     "width": 1920,
     "height": 1080,
-    "bytes": 487522,
-    "sha256": "e3a4fb6c331188f30594eca6e25d538a7da1ac830bbbe82ebb0dbe156a868b75",
+    "bytes": 492002,
+    "sha256": "cc22ab421ed9b389efb2610feb6d8b3d094ea98878ddda79204a797a4b2a926b",
     "sample_data": true
   },
   "provider_cards": {
