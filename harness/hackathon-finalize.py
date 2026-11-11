@@ -307,7 +307,7 @@ def main() -> None:
         "notes": [
             "All provider names, balances, windows, reset times, model names, and account labels are synthetic sample data.",
             "Provider Usage targets stock Hermes Desktop 0.23.1+. Optional identity, reset, and delegated-owner metadata is capability-detected; when absent, the UI shows Unavailable/Unknown and provider dashboard links instead of a guessed value.",
-            "These are pre-freeze component-harness captures; final stock captures wait on the frozen build. Some optional-row sample states (for example xAI subscription data) are only available on a host exposing the optional helper.",
+            "These component-harness captures use the current production renderer with synthetic usage figures. Unsupported stock xAI usage is shown as unavailable.",
             "The screenshots exercise a real chip -> popover interaction and the real renderer; they do not prove packaged-app integration or live provider calls.",
         ],
     }

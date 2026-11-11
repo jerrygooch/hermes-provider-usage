@@ -2,9 +2,9 @@
   "schema": "hermes.provider-usage.hackathon-assets/1",
   "title": "Provider Usage \u2014 hackathon visual and documentation package",
   "plugin_version": "0.10.0",
-  "source_commit": "994c954",
+  "source_commit": "eaefe15",
   "source_tree_dirty": false,
-  "generated_at": "2026-11-11T20:15:37.078272+00:00",
+  "generated_at": "2026-11-11T21:51:37.656893+00:00",
   "capture_kind": "browser component harness (real desktop/plugin.js + real SDK primitives + real built-in theme); not the packaged desktop app",
   "theme": {
     "name": "nous",
@@ -40,7 +40,7 @@
     "popular_cards_geometry_verified": true,
     "reset_preview_only": true,
     "video_recorded": true,
-    "video_audio_streams": 0,
+    "video_audio_streams": 1,
     "video_poster_present": true
   },
   "screenshots": [
@@ -49,20 +49,20 @@
       "file": "screenshots/01-status-chip.png",
       "title": "Provider Usage \u2014 status-bar chip (sample data)",
       "state": "Toolbar chip trigger \u00b7 subscription provider",
-      "width": 274,
-      "height": 104,
-      "bytes": 3745,
-      "sha256": "3ac556fcf094e0409118f2f1f9ed0541691bc650359177d5edb6e98cf5c0d980",
+      "width": 720,
+      "height": 228,
+      "bytes": 11517,
+      "sha256": "423d16af8985cb8721482f62cd478ce7c39f3dc8d4686e71522c3d924db03574",
       "caption": "The status-bar chip is the always-on entry point. It shows the active provider and the governing subscription windows, not a private chat quota.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "chip-button",
-        "css_width": 137.17,
-        "css_height": 52,
+        "css_width": 360,
+        "css_height": 114,
         "rendered_text_assertions": [
           "Codex",
-          "wk 84%"
+          "5h 62%"
         ],
         "geometry": {
           "ariaHasPopup": "dialog",
@@ -76,16 +76,16 @@
       "title": "Provider Usage \u2014 current provider popover (sample data)",
       "state": "Popover \u00b7 current provider detail",
       "width": 808,
-      "height": 813,
-      "bytes": 41089,
-      "sha256": "8db46806b7ff006cfb52719b9cb71c758b90283a67365d45e56bc349fbe2d37a",
+      "height": 938,
+      "bytes": 47506,
+      "sha256": "07f0105d9bb74ff6f40b1d981e542fbdfd56810a0a3be395f0fb493cd57a3af3",
       "caption": "Clicking the chip opens the current provider\u2019s detail popover: every governing window, reset time, and any paid fallback balance.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "popover",
         "css_width": 404,
-        "css_height": 406.58,
+        "css_height": 469,
         "rendered_text_assertions": [
           "View all providers",
           "5-hour",
@@ -105,16 +105,16 @@
       "title": "Provider Usage \u2014 running agents footer (sample data)",
       "state": "Popover footer \u00b7 verified pool and unknown account",
       "width": 808,
-      "height": 720,
-      "bytes": 53546,
-      "sha256": "ed8aef0d82f57bade1f177c7ecdd06f9e927a96fed193d955513d1e6f23c9126",
+      "height": 844,
+      "bytes": 55683,
+      "sha256": "1748f874387d1a947d5ec0f557c8f927b0f77c6cb7ae740528cc9b79cf1c8d39",
       "caption": "The footer attributes only what the gateway can prove. A child with a matching account shows the shared pool (5h 62%); a mismatched or missing account shows an em dash instead of borrowing another account\u2019s balance.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "popover",
         "css_width": 404,
-        "css_height": 359.98,
+        "css_height": 422,
         "rendered_text_assertions": [
           "Running agents",
           "5h 62%",
@@ -125,7 +125,7 @@
           "scrollHeight": 310,
           "clientHeight": 310,
           "scrollTop": 0,
-          "runningAgents": "Running agents\n3 agents\ngpt-5.6-codex\n\u00b7 OpenAI Codex \u00b7 Codex Pro \u00b7 sample\n5h 62%\ngpt-5.6-codex\n\u00b7 OpenAI Codex\n\u2014\nqwen3-coder:480b\n\u00b7 provider not reported\n\u2014"
+          "runningAgents": "Running agents\n3 agents\nCodex\n\u00b7 OpenAI Codex \u00b7 Codex Plus \u00b7 sample\n5h 62%\nCodex\n\u00b7 OpenAI Codex\n\u2014\nqwen3-coder:480b\n\u00b7 provider not reported\n\u2014"
         }
       }
     },
@@ -135,47 +135,103 @@
       "title": "Provider Usage \u2014 full page, multiple providers (sample data)",
       "state": "Full page \u00b7 subscription and credit providers",
       "width": 1520,
-      "height": 2053,
-      "bytes": 128057,
-      "sha256": "b5da4da8a87914d7bf59310ada7bfba1471d4174dcc348d93c7fa8a49d66a72f",
-      "caption": "The full page keeps subscription windows and credit balances together: the active Codex allowance, DeepSeek API credit, OpenCode Go, Ollama Cloud, and an xAI sample row. On stock 0.23.1 the xAI row shows an official account link instead of credits.",
+      "height": 2372,
+      "bytes": 144760,
+      "sha256": "557206219eb30df9223da42ed2e7d25547e1e4a1b9822de50cc584d98066a12d",
+      "caption": "The full page keeps subscription windows and credit balances together: the active Codex allowance, OpenRouter API credit (opened to show its labelled sample balance), DeepSeek API credit, OpenCode Go, and Ollama Cloud. The xAI row stays unavailable \u2014 stock Hermes 0.23.1 has no xAI broker \u2014 and points at the official Grok dashboard instead of inventing credits.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "pane-full",
         "css_width": 760,
-        "css_height": 1026.28,
+        "css_height": 1186,
         "rendered_text_assertions": [
           "Provider usage",
           "OTHER PROVIDERS",
+          "OpenRouter",
+          "SAMPLE CREDIT BALANCE",
+          "$24.18",
           "DeepSeek",
-          "OpenCode",
-          "$8.72"
+          "$8.72",
+          "Codex"
         ],
-        "geometry": null
+        "geometry": {
+          "boxes": [
+            {
+              "text": "OpenRouter",
+              "found": true,
+              "x": 45,
+              "y": 661.734375,
+              "width": 66.078125,
+              "height": 18,
+              "visible": true,
+              "insideCrop": true
+            },
+            {
+              "text": "Sample credit balance",
+              "found": true,
+              "x": 32,
+              "y": 740.734375,
+              "width": 696,
+              "height": 15,
+              "visible": true,
+              "insideCrop": true
+            },
+            {
+              "text": "$24.18",
+              "found": true,
+              "x": 669.375,
+              "y": 670.984375,
+              "width": 34.625,
+              "height": 16.5,
+              "visible": true,
+              "insideCrop": true
+            },
+            {
+              "text": "$8.72",
+              "found": true,
+              "x": 675.703125,
+              "y": 862.984375,
+              "width": 28.296875,
+              "height": 16.5,
+              "visible": true,
+              "insideCrop": true
+            },
+            {
+              "text": "DeepSeek",
+              "found": true,
+              "x": 45,
+              "y": 853.734375,
+              "width": 54.171875,
+              "height": 18,
+              "visible": true,
+              "insideCrop": true
+            }
+          ]
+        }
       }
     },
     {
       "id": "05-overview-expanded-metrics",
       "file": "screenshots/05-overview-expanded-metrics.png",
       "title": "Provider Usage \u2014 expanded active-provider metrics (sample data)",
-      "state": "Expanded metrics \u00b7 activity, cache, rates, pool breakdown",
+      "state": "Expanded metrics \u00b7 activity, cache, rates",
       "width": 1520,
-      "height": 2272,
-      "bytes": 173899,
-      "sha256": "929fed89bdd7e0e8b9fb6d637d48a7593fa227522cfe3d179eb8d9bd414f4d6d",
-      "caption": "When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, published token rates, and the shared-pool breakdown. Not every provider returns every field.",
+      "height": 1870,
+      "bytes": 133137,
+      "sha256": "aab05b0a94b7cb1451980394a8b2937a8330c9bd00112f46ac05ddf13d6b6aa9",
+      "caption": "When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, and published token rates. Counters, rates, and requests here are sample values; not every provider returns every field.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "active-section",
         "css_width": 760,
-        "css_height": 1135.84,
+        "css_height": 935,
         "rendered_text_assertions": [
           "Activity",
           "Prompt cache",
           "Rates",
-          "Usage breakdown",
+          "$18.42",
           "2,840 requests"
         ],
         "geometry": null
@@ -323,16 +379,16 @@
       "title": "Provider Usage \u2014 narrow responsive pane (sample data)",
       "state": "Narrow layout \u00b7 420px pane",
       "width": 840,
-      "height": 2266,
-      "bytes": 124541,
-      "sha256": "54cd8680a1e6dcf8e5aaa73b992297d225885c9a20d9ebcd93d07d6d818929ef",
+      "height": 2352,
+      "bytes": 128171,
+      "sha256": "87b8f64135e9fd538a92ed3aaa7e501279ae37c399b63c1f4220b69c13be4384",
       "caption": "At a 420px pane width the plugin\u2019s own layout stacks meters and provider cards without changing the data or hiding a reset.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "pane-full",
         "css_width": 420,
-        "css_height": 1133.2,
+        "css_height": 1176,
         "rendered_text_assertions": [
           "Provider usage",
           "5-hour",
@@ -347,20 +403,20 @@
       "title": "Provider Usage \u2014 banked reset summary (sample data)",
       "state": "Codex reset \u00b7 read-only summary",
       "width": 1520,
-      "height": 2487,
-      "bytes": 203656,
-      "sha256": "2c0647c10427a461c80c0c4d2e191546e2335e418d4c9aa124c6aa83d060dea2",
+      "height": 2084,
+      "bytes": 162930,
+      "sha256": "531bdbbda98413359fa89b55a9f10c9c8c240bffe6572e239f88365b8a76126b",
       "caption": "The stock-native reset panel reads the active Codex account only. This is a fixture summary: 2 banked resets, 1 usable now, with provider-reported inventory. No reset was redeemed.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "active-section",
         "css_width": 760,
-        "css_height": 1243.34,
+        "css_height": 1042,
         "rendered_text_assertions": [
           "Banked reset credits",
           "Resets available",
-          "Active account: Codex Pro \u00b7 sample",
+          "Active account: Codex Plus \u00b7 sample",
           "2 banked resets are available",
           "Preview reset"
         ],
@@ -373,20 +429,20 @@
       "title": "Provider Usage \u2014 reset confirmation preview (sample data)",
       "state": "Codex reset \u00b7 confirmation preview, not executed",
       "width": 1520,
-      "height": 2625,
-      "bytes": 220835,
-      "sha256": "485580cb6f529f0294d049ac92e3bbc7e9adba07d7451955fd1376cef42a5ac7",
+      "height": 2224,
+      "bytes": 180278,
+      "sha256": "cbccd43cd4752e86553f282aadd6663c7600f83dc169f04754e730b17da44861",
       "caption": "Preview/confirm is separately gated. This fixture stops at the confirmation preview; the confirm button is visible but was never clicked, and no reset was redeemed.",
       "sample_data": true,
       "capture": {
         "kind": "browser component harness",
         "target": "active-section",
         "css_width": 760,
-        "css_height": 1312.63,
+        "css_height": 1112,
         "rendered_text_assertions": [
-          "Confirm Codex Pro \u00b7 sample",
+          "Confirm Codex Plus \u00b7 sample",
           "2 banked; 1 usable now",
-          "Confirm reset on Codex Pro \u00b7 sample",
+          "Confirm reset on Codex Plus \u00b7 sample",
           "This spends one banked reset"
         ],
         "geometry": null
@@ -409,24 +465,24 @@
   },
   "video": {
     "file": "demo-full.mp4",
-    "bytes": 4681841,
-    "sha256": "91e180030897194c72889d9b4954e883e7e73dbd62ce080c9833d384d9ae96d5",
+    "bytes": 738806,
+    "sha256": "fe12aa9fe71076cac3e7728ede8320b619d6c9c1d86cd413a3f7b923b45834ed",
     "label": "Real plugin interaction demo in the component harness; synthetic sample data; not the packaged desktop app. No reset redeemed.",
     "sample_data": true,
-    "width": 1920,
-    "height": 1080,
+    "width": 1280,
+    "height": 720,
     "codec": "h264",
     "fps": "30/1",
-    "duration_seconds": 83.4,
-    "audio_streams": 0,
+    "duration_seconds": 86.0,
+    "audio_streams": 1,
     "poster": "demo-full-poster.png"
   },
   "video_poster": {
     "file": "demo-full-poster.png",
-    "width": 1920,
-    "height": 1080,
-    "bytes": 492002,
-    "sha256": "cc22ab421ed9b389efb2610feb6d8b3d094ea98878ddda79204a797a4b2a926b",
+    "width": 1280,
+    "height": 720,
+    "bytes": 82074,
+    "sha256": "6b2ea44bd3b9112bb8e1fc558cfb65b730de0be24702e71482a46a90cde333a6",
     "sample_data": true
   },
   "provider_cards": {
@@ -453,7 +509,7 @@
   "notes": [
     "All provider names, balances, windows, reset times, model names, and account labels are synthetic sample data.",
     "Provider Usage targets stock Hermes Desktop 0.23.1+. Optional identity, reset, and delegated-owner metadata is capability-detected; when absent, the UI shows Unavailable/Unknown and provider dashboard links instead of a guessed value.",
-    "These are pre-freeze component-harness captures; final stock captures wait on the frozen build. Some optional-row sample states (for example xAI subscription data) are only available on a host exposing the optional helper.",
+    "These component-harness captures use the current production renderer with synthetic usage figures. Unsupported stock xAI usage is shown as unavailable.",
     "The screenshots exercise a real chip -> popover interaction and the real renderer; they do not prove packaged-app integration or live provider calls."
   ]
 }

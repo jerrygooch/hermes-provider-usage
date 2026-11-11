@@ -48,6 +48,8 @@ const assetDir = path.join(repoRoot, 'assets', 'hackathon')
 const framesDir = path.join(outDir, 'demo-full-frames')
 const finalMp4 = path.join(assetDir, 'demo-full.mp4')
 const poster = path.join(assetDir, 'demo-full-poster.png')
+const xArg = process.argv.indexOf('--x')
+const xOut = xArg > -1 && process.argv[xArg + 1] ? path.resolve(process.argv[xArg + 1]) : null
 const recordFile = path.join(outDir, 'demo-full.record.json')
 const pluginPath = path.join(repoRoot, 'desktop', 'plugin.js')
 const bundlePath = path.join(dist, 'app.js')
@@ -101,7 +103,7 @@ const popular = readJson(path.join(__dirname, 'fixtures', 'popular-connections.j
 const honesty = readJson(path.join(__dirname, 'fixtures', 'declarative-honesty.json'))
 
 const host = {
-  model: 'gpt-5.6-codex',
+  model: 'Current Codex model',
   sessionId: 'sess-hackathon-sample',
   profile: 'default',
   connectionId: 'local',
@@ -114,13 +116,15 @@ const overview = clone(preview)
 overview.version = 1
 overview.fetched_at = '2026-11-11T16:20:00Z'
 overview.account_profile = 'default'
-overview.active = { provider: 'openai-codex', model: 'gpt-5.6-codex' }
+overview.active = { provider: 'openai-codex', model: 'Current Codex model' }
 overview.default_provider = 'openai-codex'
 overview.host = host
 
 // Active Codex card: real renderer inputs, richer sample metrics.
 const codex = overview.providers.find(row => row.id === 'openai-codex')
-codex.plan = 'Pro'
+// Plus: the plan that actually exposes a five-hour window. Pro plans have no
+// five-hour limit (https://learn.chatgpt.com/docs/pricing, read 2026-11-11).
+codex.plan = 'Plus'
 codex.limits = [
   {
     id: 'default',
@@ -131,11 +135,6 @@ codex.limits = [
     ]
   }
 ]
-codex.breakdown = [
-  { id: 'codex', label: 'Codex models', used_percent: 78 },
-  { id: 'spark', label: 'Spark models', used_percent: 22 }
-]
-codex.breakdown_note = 'Share of sample requests in this account’s shared pool.'
 codex.activity = {
   range: '7d',
   requests: 2840,
@@ -154,6 +153,21 @@ codex.activity = {
     { from: '2026-11-11T00:00:00Z', usd: 3.2, requests: 480 }
   ]
 }
+
+// Public sample credit row, mirrored from the still-capture fixture: OpenRouter
+// leads "Other providers" with a labelled sample balance. No live account.
+overview.providers.splice(1, 0, {
+  id: 'openrouter',
+  label: 'OpenRouter',
+  available: true,
+  plan: 'API credits',
+  capability: 'balance',
+  limits: [],
+  balances: [
+    { label: 'Sample credit balance', amount: 24.18, currency: 'USD', granted: 30, used: 5.82, total: 30 }
+  ],
+  details: []
+})
 
 // A Manage-account link that must only be highlighted, never opened.
 codex.manage_links = [
@@ -188,7 +202,7 @@ overview.catalog.directory = '$HERMES_HOME/provider-usage/providers'
 const resetSummary = {
   ...clone(overview),
   state: 'ready',
-  account_label: 'Codex Pro · sample',
+  account_label: 'Codex Plus · sample',
   identity_id: 'codex:sample-account',
   message: '2 banked resets are available for this account. The server selects one only after an explicit confirmation.',
   reset_executable: true,
@@ -231,7 +245,7 @@ const resetPreview = {
   summary: resetSummary,
   confirmation: {
     identity_id: 'codex:sample-account',
-    account_label: 'Codex Pro · sample',
+    account_label: 'Codex Plus · sample',
     available_count: 2,
     applicable_count: 1,
     token: 'sample-confirmation-token-not-submitted'
@@ -243,8 +257,8 @@ const resetPreview = {
 const subagents = {
   'sess-hackathon-sample': {
     subagents: [
-      { subagent_id: 'sa-sample-1', goal: 'Audit the popover layout at 420px', model: 'gpt-5.6-codex', provider: 'openai-codex', status: 'running', started_at: 1762790400 },
-      { subagent_id: 'sa-sample-2', goal: 'Collect the provider payloads', model: 'gpt-5.6-codex', provider: 'openai-codex', status: 'running', started_at: 1762790405 },
+      { subagent_id: 'sa-sample-1', goal: 'Audit the popover layout at 420px', model: 'Current Codex model', provider: 'openai-codex', status: 'running', started_at: 1762790400 },
+      { subagent_id: 'sa-sample-2', goal: 'Collect the provider payloads', model: 'Current Codex model', provider: 'openai-codex', status: 'running', started_at: 1762790405 },
       { subagent_id: 'sa-sample-3', goal: 'Summarize provider docs', model: 'qwen3-coder:480b', status: 'running', started_at: 1762790410 }
     ],
     delegations: []
@@ -293,22 +307,23 @@ const htmlPage = (fixtureData, resetMode = false) => `<!doctype html>
       linear-gradient(0deg, rgba(48,54,61,.16) 1px, transparent 1px) 0 0 / 100% 64px;
     mask-image:linear-gradient(120deg, rgba(0,0,0,.5), transparent 58%);
   }
-  #topbar { position:absolute; left:40px; right:40px; top:28px; display:flex; justify-content:space-between; align-items:flex-start; z-index:30; }
+  #topbar { position:absolute; left:40px; right:40px; top:26px; display:flex; justify-content:space-between; align-items:flex-start; z-index:30; }
   #brand { display:grid; gap:4px; }
-  #brand .name { font-size:13px; font-weight:650; letter-spacing:.02em; color:var(--ui-text-primary,#e6edf3); }
-  #brand .sub { font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ui-text-tertiary,#8b949e); }
-  #fixture { display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid rgba(210,153,34,.42); border-radius:7px; background:rgba(210,153,34,.08); font-size:10px; font-weight:650; letter-spacing:.10em; text-transform:uppercase; color:#e3b341; }
+  #brand .name { font-size:15px; font-weight:650; letter-spacing:.02em; color:var(--ui-text-primary,#e6edf3); }
+  #brand .sub { font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--ui-text-tertiary,#8b949e); }
+  #fixture { display:flex; align-items:center; gap:8px; padding:8px 11px; border:1px solid rgba(210,153,34,.42); border-radius:7px; background:rgba(210,153,34,.08); font-size:11px; font-weight:650; letter-spacing:.09em; text-transform:uppercase; color:#e3b341; }
   #fixture i { width:6px; height:6px; border-radius:50%; background:#e3b341; display:block; }
-  #rail { position:absolute; left:40px; top:118px; width:308px; z-index:25; }
-  #step { font-size:10.5px; font-weight:650; letter-spacing:.16em; text-transform:uppercase; color:var(--ui-accent,#4a84fe); }
-  #demo-title { margin:13px 0 0; font-size:25px; line-height:1.12; font-weight:650; letter-spacing:-.02em; color:var(--ui-text-primary,#e6edf3); min-height:56px; }
-  #demo-body { margin:13px 0 0; font-size:14px; line-height:1.55; color:#9fa9b4; min-height:110px; }
-  #demo-body b { color:#d7dee7; font-weight:600; }
-  #rail-rule { width:44px; height:2px; background:var(--ui-accent,#4a84fe); margin:20px 0 14px; opacity:.85; }
-  #legal { position:absolute; left:40px; bottom:26px; width:330px; font-size:9.5px; line-height:1.55; color:#6e7681; z-index:25; }
+  #rail { position:absolute; left:40px; top:108px; width:322px; z-index:25; }
+  #step { font-size:12px; font-weight:650; letter-spacing:.15em; text-transform:uppercase; color:var(--ui-accent,#4a84fe); }
+  #demo-title { margin:12px 0 0; font-size:33px; line-height:1.08; font-weight:650; letter-spacing:-.025em; color:var(--ui-text-primary,#e6edf3); min-height:72px; }
+  #demo-body { margin:12px 0 0; font-size:18.5px; line-height:1.5; color:#a8b3bf; min-height:140px; }
+  #demo-body b { color:#dde4ec; font-weight:600; }
+  #plan-note { margin:14px 0 0; padding-left:11px; border-left:2px solid rgba(210,153,34,.55); font-size:14px; line-height:1.5; color:#9aa4af; }
+  #rail-rule { width:44px; height:2px; background:var(--ui-accent,#4a84fe); margin:18px 0 0; opacity:.85; }
+  #legal { position:absolute; left:40px; bottom:24px; width:336px; font-size:11.5px; line-height:1.5; color:#7d8590; z-index:25; }
   #stage { position:absolute; left:390px; top:92px; width:850px; height:596px; z-index:5; }
   #stage-frame { position:absolute; inset:0; border:1px solid var(--ui-stroke-secondary,#30363d); border-radius:11px; background:rgba(13,17,23,.55); box-shadow:0 24px 70px rgba(0,0,0,.45); overflow:hidden; }
-  #stage-frame::after { content:"status bar · right slot"; position:absolute; right:14px; bottom:9px; font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:#5b636d; }
+  #stage-frame::after { content:"status bar · right slot"; position:absolute; right:14px; bottom:9px; font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:#626b76; }
   #pane-root { display:none; position:absolute; left:390px; top:92px; width:850px; height:596px; z-index:10; border:1px solid var(--ui-stroke-secondary,#30363d); border-radius:11px; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.45); background:var(--ui-bg-editor,#0d1117); }
   #pane-root.is-visible { display:block; animation:paneIn .32s cubic-bezier(.2,.7,.2,1) both; }
   .demo-reset #pane-root { display:block; }
@@ -318,18 +333,24 @@ const htmlPage = (fixtureData, resetMode = false) => `<!doctype html>
   #chip-root { display:block; position:absolute; left:960px; top:648px; width:290px; z-index:20; }
   #chip-root.is-hidden { display:none; }
   #demo-ring { position:fixed; z-index:60; pointer-events:none; border-radius:7px; box-shadow:0 0 0 2px rgba(74,132,254,.95), 0 0 0 7px rgba(74,132,254,.16), 0 10px 34px rgba(0,0,0,.35); transition:all .28s cubic-bezier(.2,.7,.2,1); }
-  #demo-hint { position:fixed; left:50%; top:64px; transform:translateX(-50%); z-index:61; pointer-events:none; padding:4px 8px; border-radius:5px; background:#17325f; border:1px solid rgba(74,132,254,.55); color:#dce9ff; font-size:9px; font-weight:650; letter-spacing:.09em; text-transform:uppercase; white-space:nowrap; }
-  #endcard { display:none; position:absolute; inset:0; z-index:80; background:radial-gradient(760px 420px at 50% 38%, rgba(74,132,254,.16), transparent 66%), #0b0f14; padding:96px 90px; }
-  #endcard.is-visible { display:block; animation:fadeIn .4s ease both; }
-  @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
-  #endcard .eyebrow { font-size:11px; font-weight:650; letter-spacing:.18em; text-transform:uppercase; color:var(--ui-accent,#4a84fe); }
-  #endcard h1 { margin:20px 0 0; font-size:58px; line-height:1.02; letter-spacing:-.035em; font-weight:650; }
-  #endcard .tag { margin:20px 0 0; font-size:21px; line-height:1.45; color:#b9c1ca; max-width:850px; }
-  #endcard .facts { margin-top:34px; display:grid; grid-template-columns:repeat(3,1fr); gap:12px; max-width:1080px; }
-  #endcard .fact { border:1px solid #30363d; border-radius:9px; padding:14px 16px; background:rgba(22,27,34,.66); }
-  #endcard .fact strong { display:block; font-size:13px; font-weight:650; color:#e6edf3; }
-  #endcard .fact span { display:block; margin-top:5px; font-size:11px; line-height:1.5; color:#8b949e; }
-  #endcard .legal { position:absolute; left:90px; bottom:52px; right:90px; font-size:10.5px; line-height:1.6; color:#6e7681; }
+  #demo-hint { position:fixed; left:50%; top:60px; transform:translateX(-50%); z-index:61; pointer-events:none; padding:5px 9px; border-radius:5px; background:#17325f; border:1px solid rgba(74,132,254,.55); color:#dce9ff; font-size:11px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+  #endcard { display:none; position:absolute; inset:0; z-index:80; background:radial-gradient(760px 420px at 50% 34%, rgba(74,132,254,.16), transparent 66%), #0b0f14; padding:56px 80px 52px; }
+  #endcard.is-visible { display:block; }
+  #endcard .topline { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  #endcard .eyebrow { font-size:12.5px; font-weight:650; letter-spacing:.17em; text-transform:uppercase; color:var(--ui-accent,#4a84fe); }
+  #endcard .component-tag { font-size:11px; font-weight:650; letter-spacing:.12em; text-transform:uppercase; color:#7d8590; border:1px solid #30363d; border-radius:5px; padding:5px 8px; background:rgba(22,27,34,.7); }
+  #endcard h1 { margin:16px 0 0; font-size:60px; line-height:1.03; letter-spacing:-.032em; font-weight:650; }
+  #endcard .tag { margin:12px 0 0; font-size:22px; line-height:1.4; color:#b9c1ca; max-width:1080px; }
+  #endcard .install { margin-top:20px; display:flex; align-items:center; gap:16px; max-width:1080px; border:1px solid rgba(74,132,254,.45); border-radius:9px; padding:13px 18px; background:rgba(23,50,95,.36); }
+  #endcard .install span { flex:none; font-size:11.5px; font-weight:650; letter-spacing:.13em; text-transform:uppercase; color:#9db8e8; }
+  #endcard .install code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:17px; font-weight:600; color:#e6edf3; letter-spacing:-.01em; white-space:nowrap; }
+  #endcard .facts { margin-top:18px; display:grid; grid-template-columns:repeat(3,1fr); gap:12px; max-width:1080px; }
+  #endcard .fact { border:1px solid #30363d; border-radius:9px; padding:13px 15px; background:rgba(22,27,34,.66); }
+  #endcard .fact strong { display:block; font-size:15px; font-weight:650; color:#e6edf3; }
+  #endcard .fact span { display:block; margin-top:5px; font-size:13.5px; line-height:1.45; color:#8b949e; }
+  #endcard .closing { margin-top:18px; font-size:15px; color:#8b949e; }
+  #endcard .footnote { position:absolute; left:80px; right:80px; bottom:46px; font-size:15.5px; line-height:1.45; color:#9aa4af; }
+  #endcard .legal { position:absolute; left:80px; right:80px; bottom:18px; font-size:12.5px; line-height:1.45; color:#6e7681; }
 </style>
 <script>
   window.__FIXTURE__ = ${JSON.stringify(fixtureData)};
@@ -384,13 +405,14 @@ const htmlPage = (fixtureData, resetMode = false) => `<!doctype html>
 <body>
 <div id="panel">
   <div id="topbar">
-    <div id="brand"><span class="name">Provider Usage</span><span class="sub">Hermes Desktop · component harness</span></div>
-    <div id="fixture"><i></i>Real plugin components · sample data</div>
+    <div id="brand"><span class="name">Provider Usage</span><span class="sub">Real Hermes SDK components</span></div>
+    <div id="fixture"><i></i>Component demo · sample data</div>
   </div>
   <div id="rail">
     <div id="step">${resetMode ? '09 / BANKED RESET' : '01 / STATUS BAR'}</div>
-    <h1 id="demo-title">${resetMode ? 'The allowance is spent. Check the reset.' : 'The account limit, beside the work.'}</h1>
-    <p id="demo-body">${resetMode ? 'Codex is at <b>0% left</b>. Click <b>Check reset credits</b> for a read-only, account-scoped summary. Checking itself spends nothing.' : 'A status-bar readout for the provider funding the next request. <b>Synthetic fixture</b> — no live account is connected.'}</p>
+    <h1 id="demo-title">${resetMode ? 'The allowance is spent. Check the reset.' : 'The account limit, one click away.'}</h1>
+    <p id="demo-body">${resetMode ? 'Codex is at <b>0% left</b>. Click <b>Check reset credits</b> for a read-only, account-scoped summary. Checking itself spends nothing.' : '<b>Click the usage chip in the bottom status bar to open this panel.</b> It reads the provider funding the next request. Synthetic fixture — no live account is connected.'}</p>
+    <div id="plan-note">* Plus-plan example. Pro plans currently have no five-hour limit.</div>
     <div id="rail-rule"></div>
   </div>
   <div id="legal">Component harness, not the packaged desktop app. Every value is synthetic sample data. No account, credential, email, or local path is shown.</div>
@@ -398,15 +420,21 @@ const htmlPage = (fixtureData, resetMode = false) => `<!doctype html>
   <div id="chip-root"></div>
   <div id="pane-root"></div>
   <div id="endcard">
-    <div class="eyebrow">Provider Usage · Hermes Desktop plugin</div>
-    <h1>The account limit,<br/>without the guesswork.</h1>
-    <p class="tag">Windows, resets, and paid fallbacks for the provider that actually funds the request — with an em dash wherever the host cannot prove a value.</p>
-    <div class="facts">
-      <div class="fact"><strong>Real plugin components</strong><span>Shipped desktop/plugin.js + real Hermes SDK primitives.</span></div>
-      <div class="fact"><strong>Sample data only</strong><span>Synthetic fixture. No live accounts, credentials, or balances.</span></div>
-      <div class="fact"><strong>Nothing spent</strong><span>Reset flow stopped at the preview. No reset, credit, or purchase was made.</span></div>
+    <div class="topline">
+      <div class="eyebrow">Provider Usage · Hermes Desktop plugin</div>
+      <div class="component-tag">Component demo</div>
     </div>
-    <div class="legal">Component harness with the real plugin and real SDK components, driven by a synthetic fixture · not the packaged desktop app · no live provider read · no account or local path shown.</div>
+    <h1>Know the limit<br/>before the request.</h1>
+    <p class="tag">Quota windows, balances, and reset times for the provider that actually funds the request — in the status bar and on one page, each in its own units.</p>
+    <div class="install"><span>Install</span><code>hermes plugins install jerrygooch/hermes-provider-usage</code></div>
+    <div class="facts">
+      <div class="fact"><strong>Status-bar chip</strong><span>The active provider’s governing window and reset, one click from the work.</span></div>
+      <div class="fact"><strong>Every provider, own units</strong><span>Quota windows and USD balances — never a copied number or an inferred quota.</span></div>
+      <div class="fact"><strong>Honest by construction</strong><span>An em dash wherever the host cannot prove a value.</span></div>
+    </div>
+    <div class="closing">Then open the chip in the Hermes status bar.</div>
+    <div class="footnote">* Usage figures in this demo are sample data, not real account usage.</div>
+    <div class="legal">Component demo: the shipped plugin in a browser harness with the real Hermes SDK. Not the packaged desktop app.</div>
   </div>
 </div>
 <script type="module" src="/app.js"></script>
@@ -433,7 +461,31 @@ fs.writeFileSync(path.join(dist, 'hackathon-demo-reset.html'), resetHtml)
 // ---------------------------------------------------------------------------
 // Assertion helpers
 // ---------------------------------------------------------------------------
+// Jerry review (2026-11-11): the 60.6 s cut moved before headings could be
+// read. These are settled-state holds, not a global playback slowdown — click
+// and scroll interactions keep their original pace; the extra seconds sit
+// after the state has fully rendered.
+const HOLD = {
+  intro: 9000,
+  popover: 5200,
+  agents: 4300,
+  sidebar: 5000,
+  fullPage: 6500,
+  credit: 6600,
+  manage: 3200,
+  card: 1600,
+  definitions: 3400,
+  resetIntro: 1200,
+  resetSummary: 6300,
+  previewIntro: 1100,
+  preview: 6600,
+  endcard: 9000
+}
+
+const captureStart = Date.now()
 const checks = []
+const beats = []
+const layoutChecks = []
 function ok(name, detail = '') {
   checks.push({ name, detail, at: new Date().toISOString() })
   console.log(`  ✓ ${name}${detail ? ` — ${detail}` : ''}`)
@@ -449,8 +501,87 @@ async function hasText(page, selector, needle) {
   const text = await textOf(page, selector)
   return text.replace(/\s+/g, ' ').toLowerCase().includes(needle.replace(/\s+/g, ' ').toLowerCase())
 }
+async function checkLayout(page, label) {
+  const m = await page.evaluate(() => {
+    const byId = id => document.getElementById(id)
+    const box = el => el.getBoundingClientRect()
+    const overflow = el => el.scrollHeight - el.clientHeight
+    const title = byId('demo-title')
+    const body = byId('demo-body')
+    const note = byId('plan-note')
+    const rail = box(byId('rail'))
+    const legal = box(byId('legal'))
+    const stage = box(byId('stage'))
+    return {
+      titleFont: parseFloat(getComputedStyle(title).fontSize),
+      bodyFont: parseFloat(getComputedStyle(body).fontSize),
+      noteFont: parseFloat(getComputedStyle(note).fontSize),
+      titleOverflowX: title.scrollWidth - title.clientWidth,
+      bodyOverflowY: overflow(body),
+      noteOverflowY: overflow(note),
+      railBottom: Math.round(rail.bottom),
+      legalTop: Math.round(legal.top),
+      bodyBottom: Math.round(box(body).bottom),
+      noteBottom: Math.round(box(note).bottom),
+      stageLeft: Math.round(stage.left),
+      railRight: Math.round(rail.right)
+    }
+  })
+  const failed = []
+  if (m.titleFont < 30) failed.push(`headline ${m.titleFont}px`)
+  if (m.bodyFont < 17) failed.push(`note ${m.bodyFont}px`)
+  if (m.noteOverflowY > 1) failed.push(`plan note clipped ${m.noteOverflowY}px`)
+  if (m.titleOverflowX > 1) failed.push('headline overflows rail')
+  if (m.bodyOverflowY > 1) failed.push(`body clipped ${m.bodyOverflowY}px`)
+  if (m.railBottom > m.legalTop - 8) failed.push(`rail bottom ${m.railBottom} crosses legal ${m.legalTop}`)
+  if (m.stageLeft - m.railRight < 24) failed.push(`rail/stage gap ${m.stageLeft - m.railRight}`)
+  layoutChecks.push({ label, ...m, pass: failed.length === 0 })
+  if (failed.length) throw new Error(`LAYOUT FAILED (${label}): ${failed.join('; ')}`)
+}
+async function checkPlan(page, selector, label, opts = {}) {
+  const text = (await page.locator(selector).innerText()).replace(/\s+/g, ' ')
+  const plusPattern = opts.plus || /\bPlus\b/
+  const proPattern = opts.pro || /\bPro\b/
+  const plus = plusPattern.test(text)
+  const pro = proPattern.test(text)
+  const near = (pattern) => {
+    const hit = pattern.exec(text)
+    return hit ? text.slice(Math.max(0, hit.index - 40), hit.index + 60) : ''
+  }
+  layoutChecks.push({ label, kind: 'plan', selector, codex_plus: plus, codex_pro: pro, pass: plus && !pro, plus_near: near(plusPattern), pro_near: near(proPattern) })
+  if (!plus || pro) throw new Error(`PLAN LABEL FAILED (${label}): plus=${plus} pro=${pro} :: ${text.slice(0, 240)}`)
+}
+async function checkEndcard(page) {
+  const m = await page.evaluate(() => {
+    const box = selector => document.querySelector(selector).getBoundingClientRect()
+    const style = (selector, prop) => parseFloat(getComputedStyle(document.querySelector(selector))[prop])
+    const closing = box('#endcard .closing')
+    const footnote = box('#endcard .footnote')
+    const legal = box('#endcard .legal')
+    const code = document.querySelector('#endcard .install code')
+    return {
+      h1Font: style('#endcard h1', 'fontSize'),
+      footnoteFont: style('#endcard .footnote', 'fontSize'),
+      closingBottom: Math.round(closing.bottom),
+      footnoteTop: Math.round(footnote.top),
+      footnoteBottom: Math.round(footnote.bottom),
+      legalTop: Math.round(legal.top),
+      codeOverflow: code.scrollWidth - code.clientWidth
+    }
+  })
+  const failed = []
+  if (m.h1Font < 54) failed.push(`endcard h1 ${m.h1Font}px`)
+  if (m.footnoteFont < 14) failed.push(`footnote ${m.footnoteFont}px`)
+  if (m.codeOverflow > 1) failed.push(`install command clips ${m.codeOverflow}px`)
+  if (m.closingBottom > m.footnoteTop - 8) failed.push('closing text crowds footnote')
+  if (m.footnoteBottom > m.legalTop - 6) failed.push('footnote crowds legal line')
+  layoutChecks.push({ label: 'end card', ...m, pass: failed.length === 0 })
+  if (failed.length) throw new Error(`ENDCARD LAYOUT FAILED: ${failed.join('; ')}`)
+}
 async function caption(page, step, title, body) {
   await page.evaluate(([step, title, body]) => window.__DEMO_CAPTION__(step, title, body), [step, title, body])
+  beats.push({ step, title, at: Math.round((Date.now() - captureStart) / 100) / 10 })
+  await checkLayout(page, step)
 }
 async function ring(page, target, label) {
   const locator = typeof target === 'string' ? page.locator(target).first() : target
@@ -494,7 +625,7 @@ fs.rmSync(rawDir, { recursive: true, force: true })
 fs.mkdirSync(rawDir, { recursive: true })
 const externalRequests = []
 let browser
-const startedAt = Date.now()
+const startedAt = captureStart
 
 try {
   browser = await chromium.launch({
@@ -523,18 +654,18 @@ try {
   await page.goto(`http://127.0.0.1:${PORT}/hackathon-demo.html?v=${Date.now()}`, { waitUntil: 'load' })
   await page.waitForFunction('window.__HARNESS_READY__ === true', null, { timeout: 30000 })
   await page.locator('#chip-root button').waitFor({ state: 'visible', timeout: 20000 })
-  await sleep(900)
+  await sleep(700)
   const harnessUrl = page.url()
 
   // 01 — resting chip
-  await caption(page, '01 / STATUS BAR', 'The account limit, beside the work.',
-    'A status-bar readout for the provider funding the next request. <b>Synthetic fixture</b> — no live account is connected.')
-  await sleep(3000)
+  await caption(page, '01 / STATUS BAR', 'The account limit, one click away.',
+    '<b>Click the usage chip in the bottom status bar to open this panel.</b> It reads the provider funding the next request. Synthetic fixture — no live account is connected.')
+  await sleep(HOLD.intro)
   await page.locator('#chip-root button').hover()
-  await sleep(800)
+  await sleep(500)
   await shot(page, '01-chip-hover')
   const chipText = (await page.locator('#chip-root button').innerText()).replace(/\s+/g, ' ')
-  await must(chipText.includes('Codex') && /wk\s*84%/.test(chipText), 'chip shows active provider + governing weekly window', chipText)
+  await must(chipText.includes('Codex') && /5h\s*62%/.test(chipText), 'chip shows active provider + governing 5-hour window (Plus)', chipText)
 
   // 02 — click → popover
   await page.locator('#chip-root button').click()
@@ -544,16 +675,19 @@ try {
   await must(await hasText(page, '[data-slot="popover-content"]', 'Weekly'), 'popover shows weekly window')
   await must(await hasText(page, '[data-slot="popover-content"]', '62% left'), 'popover shows 62% left')
   await must(await hasText(page, '[data-slot="popover-content"]', 'View all providers'), 'popover exposes View all providers')
+  await checkPlan(page, '[data-slot="popover-content"]', 'popover plan badge')
   await caption(page, '02 / USAGE & RESETS', 'Every governing window, in one place.',
-    'Codex <b>5-hour 62% left</b> · <b>Weekly 84% left</b>, each with its reset time. The paid fallback appears only on its own labelled row.')
-  await sleep(6500)
+    'Codex <b>5-hour 62% left</b> · <b>Weekly 84% left</b>, each with its reset time. <b>Refresh</b> re-reads this provider; the paid fallback stays on its own labelled row.')
+  await sleep(HOLD.popover)
   await shot(page, '02-popover-top')
 
   // 03 — wheel-scroll the popover to the running-agents footer
+  await caption(page, '03 / RUNNING AGENTS', 'Scroll down to running agents.',
+    'The footer shows active children. If the host cannot match an account, usage stays <b>unknown</b> rather than borrowing another account’s balance.')
   const popRect = await page.locator('[data-slot="popover-content"]').boundingBox()
   await page.mouse.move(popRect.x + popRect.width / 2, popRect.y + popRect.height / 2)
   await page.mouse.wheel(0, 460)
-  await sleep(900)
+  await sleep(700)
   const scrollState = await page.evaluate(() => {
     const el = document.querySelector('[data-slot="popover-content"]')
     return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }
@@ -565,19 +699,18 @@ try {
   await must(footerFlat.includes('3 agents'), 'footer counts three running agents', footerFlat.slice(0, 120))
   await must(footerFlat.includes('provider not reported'), 'footer shows provider-not-reported for an anonymous child')
   await must((footerFlat.match(/—/g) || []).length >= 2, 'footer uses em dashes for unverified pools', `${(footerFlat.match(/—/g) || []).length} em dashes`)
-  await caption(page, '03 / RUNNING AGENTS', 'Prove the account, or say nothing.',
-    'Three children are running. With no stock identity match, usage is an <b>em dash</b> — never another account’s balance. The anonymous child says <b>provider not reported</b>.')
-  await sleep(7000)
+
+  await sleep(HOLD.agents)
   await shot(page, '03-footer-unknown')
 
   // 04 — View all → full page
-  await caption(page, '03 / VIEW ALL', 'Open the full provider page.',
-    'Click <b>View all providers</b>: the popover dismisses and the full page opens with every provider.')
-  await sleep(1400)
+  await caption(page, '03 / VIEW ALL', 'Two ways to the full page.',
+    '<b>Choose View all providers</b> below the panel. You can also open Provider Usage from the far-left sidebar, alongside New session, Capabilities and Scheduled jobs.')
+  await sleep(HOLD.sidebar)
   await page.locator('[aria-label="View all providers"]').click()
   await page.waitForFunction('window.__DEMO_STATE__.overview_opened === true', null, { timeout: 4000 })
   await page.locator('#pane-root').waitFor({ state: 'visible' })
-  await sleep(650)
+  await sleep(600)
   await must(await page.locator('#chip-root').isHidden(), 'popover/chip dismissed when the page opens')
   await must(await hasText(page, '#pane-root', 'Provider usage'), 'full page rendered')
   await must(await hasText(page, '#pane-root', 'Other providers'), 'full page lists other providers')
@@ -585,50 +718,69 @@ try {
     const scroll = document.querySelector('#pane-root div[style*="overflow-y"]')
     if (scroll) scroll.scrollTop = 0
   })
-  await sleep(500)
+  await sleep(350)
   await must(await hasText(page, '#pane-root', 'Current request funding'), 'active Codex card is at the top of the page')
   const activeBox = await page.locator('#provider-usage-active-heading').boundingBox()
   await must(Boolean(activeBox && activeBox.y >= 100 && activeBox.y < 230), 'active provider heading is in the visible pane viewport', JSON.stringify(activeBox))
+  // Plan label is proven on the popover badge; the full-page frame is inspected separately.
   await caption(page, '04 / FULL PAGE', 'Every provider, each in its own units.',
-    'The active Codex card keeps its windows and reset times. DeepSeek shows <b>API credit</b> in USD — every provider in its own units, never a copied balance.')
-  await sleep(7500)
+    'The active Codex card shows its <b>usage windows and reset times</b>. Scroll down for other providers and their balances.')
+  await sleep(HOLD.fullPage)
   await shot(page, '04-full-page')
 
-  // 05 — provider detail expansion (real click on a disclosure row)
+  // 05 — credit-provider detail (real click on a disclosure row)
+  await caption(page, '05 / CREDIT DETAIL', 'Scroll to provider balances.',
+    'OpenRouter and DeepSeek each show their own <b>API credit</b>. Click a provider to expand its details.')
+  const openrouterRow = page.locator('[aria-label="Expand OpenRouter"]')
+  await openrouterRow.scrollIntoViewIfNeeded()
+  await sleep(350)
+  await openrouterRow.click()
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[aria-label="Collapse OpenRouter"]')
+    return Boolean(el && el.getAttribute('aria-expanded') === 'true')
+  }, null, { timeout: 4000 })
+  await sleep(350)
+  await must(await hasText(page, '#pane-root', 'Sample credit balance'), 'expanded row reveals sample credit balance')
+  await must(await hasText(page, '#pane-root', '$24.18') && await hasText(page, '#pane-root', '$8.72'), 'credit rows name both sample balances')
+  await caption(page, '05 / CREDIT DETAIL', 'Credit balances, each in its own row.',
+    'OpenRouter expands to a labelled <b>sample credit balance of $24.18</b>; DeepSeek’s <b>$8.72</b> sits on its own row. Neither is copied from the active Codex subscription.')
+  await sleep(HOLD.credit)
+  await shot(page, '05-expanded-detail')
+
+  // 06 — Manage account links highlighted, never opened
+  await caption(page, '06 / ACCOUNT LINKS', 'Open a provider’s account page.',
+    'Expand a provider to find its account link. Here we highlight DeepSeek’s link without leaving the demo.')
   const deepseekRow = page.locator('[aria-label="Expand DeepSeek"]')
   await deepseekRow.scrollIntoViewIfNeeded()
-  await sleep(500)
+  await sleep(300)
   await deepseekRow.click()
   await page.waitForFunction(() => {
     const el = document.querySelector('[aria-label="Collapse DeepSeek"]')
     return Boolean(el && el.getAttribute('aria-expanded') === 'true')
   }, null, { timeout: 4000 })
-  await sleep(500)
-  await must(await hasText(page, '#pane-root', 'Balance'), 'expanded row reveals balance detail')
-  await must(await hasText(page, '#pane-root', 'Total balance'), 'expanded row names the balance')
-  await caption(page, '05 / PROVIDER DETAIL', 'Expand a provider for its own detail.',
-    'A real click expands DeepSeek: balance components and reset metadata, read from that provider’s row — not copied from the active account.')
-  await sleep(6000)
-  await shot(page, '05-expanded-detail')
-
-  // 06 — Manage account links highlighted, never opened
-  const manageHref = await page.locator('a[aria-label="DeepSeek billing"]').getAttribute('href')
+  await sleep(300)
+  const manageLink = page.locator('a[aria-label="DeepSeek billing"]')
+  await manageLink.scrollIntoViewIfNeeded()
+  await sleep(250)
+  const manageHref = await manageLink.getAttribute('href')
   await must(Boolean(manageHref && manageHref.startsWith('https://platform.deepseek.com/')), 'manage link is a real official URL', manageHref)
-  await ring(page, 'a[aria-label="DeepSeek billing"]', 'Manage account · highlight only')
-  await page.locator('a[aria-label="DeepSeek billing"]').hover()
-  await sleep(600)
+  await ring(page, manageLink, 'Manage account · highlight only')
+  await manageLink.hover()
+  await sleep(350)
   await must(page.url() === harnessUrl, 'hovering Manage account did not navigate')
   await must(popups === 0, 'Manage account did not open a login window')
   await caption(page, '06 / ACCOUNT LINKS', 'A link out — never a login in disguise.',
     'Manage-account links are highlighted, not opened. No real sign-in page, credential, or password is touched anywhere in this demo.')
-  await sleep(4500)
+  await sleep(HOLD.manage)
   await shot(page, '06-manage-link')
   await page.evaluate(() => window.__DEMO_UNRING__())
 
   // 07 — three popular connection cards
+  await caption(page, '07 / POPULAR PROVIDERS', 'Find provider setup cards.',
+    'Scroll down to the Claude, Gemini and Z.ai cards. They describe connection options without inventing balances.')
   const popularHeading = page.getByText('Popular providers', { exact: true }).first()
   await popularHeading.scrollIntoViewIfNeeded()
-  await sleep(750)
+  await sleep(500)
   const popularSection = page.locator('section[aria-label="Popular provider connections"]')
   await must(await popularSection.locator('text=Claude / Anthropic').count() > 0, 'Claude / Anthropic card present')
   await must(await popularSection.locator('text=Google Gemini API').count() > 0, 'Google Gemini API card present')
@@ -639,24 +791,26 @@ try {
   const labels = ['Claude / Anthropic', 'Google Gemini API', 'Z.ai / GLM']
   for (let index = 0; index < labels.length; index += 1) {
     await page.getByText(labels[index], { exact: true }).first().scrollIntoViewIfNeeded()
-    await sleep(520)
+    await sleep(450)
     await page.evaluate(([rect, text]) => window.__DEMO_RING__(rect, text), [await cardRect(page, labels[index]), `Card ${index + 1} / 3`])
-    await sleep(2200)
+    await sleep(HOLD.card)
   }
-  await sleep(1500)
+  await sleep(800)
   await shot(page, '07-popular-cards')
   await page.evaluate(() => window.__DEMO_UNRING__())
 
   // 08 — trust states in Provider definitions
+  await caption(page, '08 / DEFINITIONS & TRUST', 'Review custom provider definitions.',
+    'Scroll to provider definitions to see connection and approval states.')
   await page.getByText('Provider definitions', { exact: true }).first().scrollIntoViewIfNeeded()
-  await sleep(800)
+  await sleep(500)
   await must(await hasText(page, '#pane-root', 'Approval required'), 'catalog shows Approval required')
   await must(await hasText(page, '#pane-root', 'Blocked'), 'catalog shows Blocked')
   await must(await hasText(page, '#pane-root', 'Unverified mapping'), 'catalog shows Unverified mapping')
   await page.evaluate(([rect, text]) => window.__DEMO_RING__(rect, text), [await headerRect(page, 'Provider definitions'), 'Definitions · trust states'])
   await caption(page, '08 / DEFINITIONS & TRUST', 'Trust is a state, not a vibe.',
     'Read-only JSON names the exact missing credential. A profile-local file shows <b>Approval required</b>; a blocked or unverified mapping stays visible. Nothing is fetched or auto-approved.')
-  await sleep(6000)
+  await sleep(HOLD.definitions)
   await shot(page, '08-trust-definitions')
   await page.evaluate(() => window.__DEMO_UNRING__())
 
@@ -666,35 +820,40 @@ try {
   await page.goto(`http://127.0.0.1:${PORT}/hackathon-demo-reset.html?v=${Date.now()}`, { waitUntil: 'load' })
   await page.waitForFunction('window.__HARNESS_READY__ === true', null, { timeout: 30000 })
   await page.locator('#pane-root').waitFor({ state: 'visible' })
-  await sleep(800)
+  await sleep(500)
   await must(await hasText(page, '#pane-root', '0% left'), 'reset scenario opens with exhausted Codex windows (0% left)')
   await must(!(await hasText(page, '#pane-root', '62% left')), 'no healthy 62% meter beside the reset flow')
   await caption(page, '09 / BANKED RESET', 'The allowance is spent. Check the reset.',
-    'Codex is at <b>0% left</b>. Click <b>Check reset credits</b> for a read-only, account-scoped summary. Checking itself spends nothing.')
-  await sleep(1400)
+    'Codex is at <b>0% left</b>. Click <b>Check reset credits</b> for a read-only, account-scoped summary of provider-reported inventory.')
+  await sleep(HOLD.resetIntro)
   const checkButton = page.getByRole('button', { name: 'Check reset credits' })
   await checkButton.scrollIntoViewIfNeeded()
-  await sleep(600)
+  await sleep(350)
   await checkButton.click()
   await page.waitForFunction(() => document.body.innerText.includes('Resets available'), null, { timeout: 5000 })
   await must(await hasText(page, '#pane-root', '2 banked resets are available'), 'read-only reset summary rendered')
-  await must(await hasText(page, '#pane-root', 'Active account: Codex Pro · sample'), 'summary names the synthetic account')
+  await must(await hasText(page, '#pane-root', 'Active account: Codex Plus · sample'), 'summary names the synthetic account')
+  await checkPlan(page, '#pane-root', 'reset summary account', { plus: /Codex Plus/, pro: /Codex Pro/ })
   await caption(page, '09 / BANKED RESET', 'A read-only summary, scoped to one account.',
-    'Two banked resets are visible for the sample Codex account. This panel only <b>reads</b> provider-reported inventory; nothing is redeemed by checking.')
-  await sleep(4500)
+    'Two banked resets are visible for the sample Codex account. This panel only <b>reads</b> provider-reported inventory, nothing is redeemed by checking.')
+  await sleep(HOLD.resetSummary)
   await shot(page, '09-reset-summary')
 
   // The preview is a second POST read; script the preview payload before the
   // click so the response carries the confirmation block.
   await page.evaluate((previewData) => window.__HARNESS__.setOverview(previewData), resetPreview)
-  await caption(page, '10 / PREVIEW ONLY', 'Preview the reset — then stop.',
-    'Click <b>Preview reset</b>. It opens a confirmation preview; the final <b>Confirm reset</b> is never pressed.')
-  await sleep(1400)
+  await caption(page, '10 / REVIEW BEFORE CONFIRMING', 'Review before confirming.',
+    'Click <b>Preview reset</b> to open the confirmation and check the account and counts. The demo stops at the review step.')
+  await sleep(HOLD.previewIntro)
   const previewButton = page.getByRole('button', { name: 'Preview reset' })
+  await ring(page, previewButton, 'Review before confirming')
+  await sleep(700)
   await previewButton.click()
-  await page.waitForFunction(() => document.body.innerText.includes('Confirm Codex Pro · sample'), null, { timeout: 5000 })
+  await page.evaluate(() => window.__DEMO_UNRING__())
+  await page.waitForFunction(() => document.body.innerText.includes('Confirm Codex Plus · sample'), null, { timeout: 5000 })
   await must(await hasText(page, '#pane-root', 'This spends one banked reset'), 'confirmation preview names the spend')
-  const confirmButton = page.getByRole('button', { name: /Confirm reset on Codex Pro/ })
+  await checkPlan(page, '#pane-root', 'confirmation preview account', { plus: /Codex Plus/, pro: /Codex Pro/ })
+  const confirmButton = page.getByRole('button', { name: /Confirm reset on Codex Plus/ })
   await must(await confirmButton.count() === 1, 'explicit final confirm button exists')
   await must(await confirmButton.isVisible(), 'final confirm is visible and deliberately not clicked')
   await sleep(400)
@@ -703,21 +862,22 @@ try {
   await must(confirmCalls.length === 0, 'ZERO /reset/confirm calls — confirmation intercepted, nothing redeemed', `${calls.length} harness REST calls`)
   await must(calls.some(call => call.path.includes('/reset/summary')), 'summary read was a real harness REST call')
   await must(calls.some(call => call.path.includes('/reset/preview')), 'preview read was a real harness REST call')
-  await caption(page, '10 / STOP BEFORE CONFIRM', 'The preview is where this demo ends.',
-    'The confirmation names the account and counts <b>2 banked · 1 usable</b>. The final <b>Confirm reset</b> is visible but never clicked: no reset, credit, or purchase was made.')
-  await sleep(5500)
+  await caption(page, '10 / REVIEW BEFORE CONFIRMING', 'Review before confirming.',
+    'The confirmation names the sample account and counts <b>2 banked · 1 usable</b>. This demo stops at the review step.')
+  await sleep(HOLD.preview)
   await shot(page, '10-confirm-preview')
 
   // 11 — end card
   await page.evaluate(() => window.__DEMO_END__())
-  await sleep(400)
-  await must(await page.locator('#endcard').isVisible(), 'end card disclosure visible')
-  await must(await hasText(page, '#endcard', 'Real plugin components'), 'end card labels real components')
-  await must(await hasText(page, '#endcard', 'Sample data only'), 'end card labels sample data')
-  await must(await hasText(page, '#endcard', 'Nothing spent'), 'end card states nothing was spent')
-  await sleep(4600)
+  await sleep(500)
+  await must(await page.locator('#endcard').isVisible(), 'end card visible with component-demo framing')
+  await must(await hasText(page, '#endcard', 'hermes plugins install jerrygooch/hermes-provider-usage'), 'end card shows the install command')
+  await must(await hasText(page, '#endcard', 'Status-bar chip') && await hasText(page, '#endcard', 'Every provider, own units') && await hasText(page, '#endcard', 'Honest by construction') && await hasText(page, '#endcard', 'Component demo'), 'end card lists capabilities and keeps the component-demo label')
+  await must(await hasText(page, '#endcard', 'Usage figures in this demo are sample data, not real account usage.'), 'end card footnote labels figures as sample data')
+  await checkEndcard(page)
+  await sleep(HOLD.endcard)
   await shot(page, '11-endcard')
-  await sleep(1200)
+  await sleep(1000)
 
   const resetState = await page.evaluate(() => ({ ...window.__DEMO_STATE__ }))
   const pageState = { ...stateBeforeReset, ...resetState, restCalls: calls.length }
@@ -736,8 +896,8 @@ try {
   const probeRaw = spawnSync(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration,size', '-of', 'json', video], { encoding: 'utf8' })
   const rawMeta = JSON.parse(probeRaw.stdout || '{}').format || {}
   const rawDuration = Number(rawMeta.duration || 0)
-  const targetDuration = 84
-  const trimStart = rawDuration > targetDuration + 2 ? Math.min(rawDuration - targetDuration, 3.5) : 0
+  // Never trim the head: the opening caption and chip are part of the demo.
+  const trimStart = 0
   const encodeArgs = [
     '-y', '-hide_banner', '-loglevel', 'error',
     ...(trimStart > 0 ? ['-ss', trimStart.toFixed(3)] : []),
@@ -757,12 +917,64 @@ try {
   const stream = probe.streams?.[0] || {}
   const format = probe.format || {}
   const duration = Number(format.duration || stream.duration || 0)
-  if (!(duration > 60 && duration <= 90)) throw new Error(`Duration ${duration}s outside 60–90s`)
+  if (!(duration >= 80 && duration <= 88)) throw new Error(`Duration ${duration}s outside the approved 80–88s window`)
+  if (duration >= 90) throw new Error(`Duration ${duration}s violates the 90s hard cap`)
   if (stream.width !== OUT_W || stream.height !== OUT_H) throw new Error(`Resolution ${stream.width}x${stream.height}`)
   if (stream.codec_name !== 'h264' || stream.pix_fmt !== 'yuv420p') throw new Error(`Codec ${stream.codec_name}/${stream.pix_fmt}`)
 
-  // poster at 8s — popover/window beat
-  const posterAt = Math.min(8.0, Math.max(0, duration - 1))
+  // ---- X companion: 720p, H.264 Main, silent AAC, faststart ----
+  let xProbe = null
+  if (xOut) {
+    fs.mkdirSync(path.dirname(xOut), { recursive: true })
+    const xArgs = [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-i', finalMp4,
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-vf', 'scale=1280:720:flags=lanczos,format=yuv420p',
+      '-c:v', 'libx264', '-preset', 'slow', '-crf', '20',
+      '-profile:v', 'main', '-level', '3.1', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '96k', '-ac', '2', '-ar', '48000',
+      '-shortest', '-movflags', '+faststart', '-map_metadata', '-1',
+      '-metadata', 'title=Provider Usage — real plugin components, sample data',
+      '-metadata', `comment=Synthetic fixture; plugin sha256 ${sha256(pluginPath)}; bundle sha256 ${sha256(bundlePath)}; no live accounts; reset preview only, nothing redeemed`,
+      xOut
+    ]
+    const xf = spawnSync(FFMPEG, xArgs, { encoding: 'utf8' })
+    if (xf.status !== 0) throw new Error(`X encode failed: ${xf.stderr || xf.stdout}`)
+    const xRaw = JSON.parse(spawnSync(FFPROBE, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,profile,width,height,pix_fmt,r_frame_rate:format=duration,size,format_name', '-of', 'json', xOut], { encoding: 'utf8' }).stdout || '{}')
+    const xStream = (xRaw.streams || []).find(item => item.codec_type === 'video') || {}
+    const xAudio = (xRaw.streams || []).find(item => item.codec_type === 'audio') || {}
+    const xDuration = Number(xRaw.format?.duration || 0)
+    if (Math.abs(xDuration - duration) > 0.15) throw new Error(`X duration ${xDuration}s != master ${duration}s`)
+    if (xStream.width !== 1280 || xStream.height !== 720) throw new Error(`X resolution ${xStream.width}x${xStream.height}`)
+    if (xStream.codec_name !== 'h264' || xStream.profile !== 'Main') throw new Error(`X codec ${xStream.codec_name}/${xStream.profile}`)
+    if (xAudio.codec_name !== 'aac') throw new Error(`X audio ${xAudio.codec_name}`)
+    const bytes = fs.readFileSync(xOut)
+    const moov = bytes.indexOf(Buffer.from('moov'))
+    const mdat = bytes.indexOf(Buffer.from('mdat'))
+    const faststart = moov > 0 && mdat > 0 && moov < mdat
+    if (!faststart) throw new Error('X MP4 is not faststart (moov after mdat)')
+    const volume = spawnSync(FFMPEG, ['-hide_banner', '-i', xOut, '-map', '0:a', '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' })
+    const maxDb = Number((/max_volume:\s*(-?[\d.]+) dB/.exec(volume.stderr || '') || [])[1])
+    if (!(maxDb <= -90)) throw new Error(`X audio is not silent (max ${maxDb} dB)`)
+    xProbe = {
+      file: xOut.replace(/\\/g, '/'),
+      duration_seconds: Math.round(xDuration * 1000) / 1000,
+      width: xStream.width,
+      height: xStream.height,
+      codec: xStream.codec_name,
+      profile: xStream.profile,
+      pix_fmt: xStream.pix_fmt,
+      fps: xStream.r_frame_rate,
+      audio: `${xAudio.codec_name}/${xAudio.profile || 'LC'} silent (max ${maxDb} dB)`,
+      faststart,
+      bytes: fs.statSync(xOut).size
+    }
+  }
+
+  // poster from the settled popover beat (beat 02), not a fixed offset
+  const popoverBeat = beats.find(beat => beat.step.startsWith('02'))
+  const posterAt = Math.min((popoverBeat?.at ?? duration * 0.16) + 2.2, duration - 1)
   const posterFf = spawnSync(FFMPEG, ['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(posterAt), '-i', finalMp4, '-frames:v', '1', '-update', '1', poster], { encoding: 'utf8' })
   if (posterFf.status !== 0) throw new Error(`poster failed: ${posterFf.stderr}`)
 
@@ -786,6 +998,9 @@ try {
       metadata_comment: format.tags?.comment || ''
     },
     assertions: checks,
+    layout_checks: layoutChecks,
+    beats,
+    x_companion: xProbe,
     interaction: { view_all_clicks: pageState.view_all_clicks, harness_rest_calls: calls.length, reset_confirm_calls: confirmCalls.length, external_requests: externalRequests.length, popups, navigations }
   }
   fs.writeFileSync(recordFile, JSON.stringify(record, null, 2) + '\n')

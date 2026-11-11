@@ -10,9 +10,9 @@ The plugin reports the **shared account resource** behind a provider. It does no
 
 These images are **sample data rendered in a browser component harness** from the plugin's real components and SDK primitives with the built-in Nous dark theme. They are **not screenshots of the packaged Electron app**, and no real account values appear. See `harness/` for the reproducible capture.
 
-![Provider Usage full page (sample data)](assets/provider-usage-page.png)
+![Provider Usage full page (sample data)](assets/hackathon/screenshots/04-overview-multi-provider.png)
 
-![Provider Usage toolbar popover (sample data)](assets/provider-usage-popover.png)
+![Provider Usage toolbar popover (sample data)](assets/hackathon/screenshots/02-popover-current.png)
 
 More: the [12-shot gallery](assets/hackathon/gallery.html), [feature and trust-boundary infographic](assets/hackathon/infographic.png), [full demo](assets/hackathon/demo-full.mp4), and the [hackathon guide](docs/hackathon-guide.md) with the shot list, evidence tiers, and build notes.
 
@@ -26,7 +26,7 @@ More: the [12-shot gallery](assets/hackathon/gallery.html), [feature and trust-b
 - Marks missing data **Unavailable** or **Unknown** instead of filling gaps with guesses.
 - Adds a running-agents footer to the popover when the gateway reports live delegated children.
 
-A Spark session is the useful example: Spark can have separate 5-hour and weekly limits. The chip shows the resource that can fund the next request, while the page keeps both meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
+Codex can report separate 5-hour and weekly limits. The chip summarizes the governing allowance, while the page keeps both meters and their reset times visible. An exhausted weekly limit does not make the still-full 5-hour meter disappear.
 
 ### Don't see the chip?
 

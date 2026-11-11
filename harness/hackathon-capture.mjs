@@ -54,6 +54,10 @@ const { CDP } = await import(
 const PORT = 8951
 const CDP_PORT = 8952
 const THEME = { name: 'nous', mode: 'dark' }
+// Ordinary model-family label for the public sample. Spark is retired and no
+// specific model slug is current enough to publish, so the captures say only
+// what the plugin can show: the Codex family.
+const SAMPLE_MODEL = 'Codex'
 const PAGE_H = 2400
 const FULL_W = 760
 const NARROW_W = 420
@@ -103,44 +107,98 @@ function resetFixtureOf(overview) {
 // ---------------------------------------------------------------------------
 
 // 1–3, 4, 9: the public sample overview. No real account values.
-const multiProvider = clone(preview)
+// Public sample rows: the two credit providers carry the story, so OpenRouter
+// leads the secondary list with a balance whose label says it is a sample. xAI
+// stays in its honest stock state — stock Hermes 0.23.1 has no xAI broker, so
+// the row is unavailable with the official dashboard link, never an invented
+// credit figure.
+const OPENROUTER_SAMPLE = {
+  id: 'openrouter',
+  label: 'OpenRouter',
+  available: true,
+  plan: 'API credits',
+  capability: 'balance',
+  limits: [],
+  balances: [
+    {
+      label: 'Sample credit balance',
+      amount: 24.18,
+      currency: 'USD',
+      granted: 30,
+      used: 5.82,
+      total: 30
+    }
+  ],
+  details: []
+}
+const XAI_STOCK_SAMPLE = {
+  id: 'xai-oauth',
+  label: 'SuperGrok / xAI OAuth',
+  available: false,
+  plan: 'SuperGrok',
+  capability: 'usage',
+  unavailable_reason: 'Stock Hermes 0.23.1 has no xAI broker, so subscription credits stay unread. Use the official Grok dashboard (grok.com/dashboard).',
+  manage_links: [{ label: 'Grok dashboard', url: 'https://grok.com/dashboard' }]
+}
+function withShowcaseRows(sample) {
+  const next = clone(sample)
+  const rows = next.providers.filter(row => row.id !== 'openrouter' && row.id !== 'xai-oauth')
+  // OpenRouter immediately after the active Codex row: it leads "Other
+  // providers". The unavailable xAI row stays last, next to the limited list.
+  rows.splice(Math.min(1, rows.length), 0, clone(OPENROUTER_SAMPLE))
+  rows.push(clone(XAI_STOCK_SAMPLE))
+  next.providers = rows
+  return next
+}
+
+// Public sample identity: Plus, not Pro. The stills keep the five-hour window
+// because a Plus plan really does have one (the official pricing page says Pro
+// plans currently have no five-hour limit). The footnote on every frame that
+// shows that window states the distinction; production plan rules are never
+// hardcoded in the harness.
+const SAMPLE_PLAN = 'Plus'
+function withCodexPlusSample(sample) {
+  const next = clone(sample)
+  for (const row of next.providers || []) {
+    if (row.id !== 'openai-codex') continue
+    row.plan = SAMPLE_PLAN
+    for (const account of row.accounts || []) {
+      if (typeof account.label === 'string') {
+        account.label = account.label.replace(/Codex[ ]+Pro/g, 'Codex Plus')
+      }
+    }
+  }
+  return next
+}
+const CODEX_5H_FOOTNOTE = '* Plus-plan example. Pro plans currently have no five-hour limit.'
+
+
+const multiProvider = withShowcaseRows(withCodexPlusSample(preview))
 multiProvider.fetched_at = '2026-11-11T16:20:00Z'
 multiProvider.account_profile = 'default'
+multiProvider.active = { provider: 'openai-codex', model: SAMPLE_MODEL }
 multiProvider.host = hostFor(multiProvider)
 
 // 5: active-provider metrics. The fields are real renderer inputs; not every
 // provider returns all of them. The caption says so.
-const expanded = clone(preview)
+const expanded = withShowcaseRows(withCodexPlusSample(preview))
 expanded.fetched_at = '2026-11-11T16:20:00Z'
 expanded.account_profile = 'default'
-expanded.active = { provider: 'openai-codex', model: 'gpt-5.6-codex' }
+expanded.active = { provider: 'openai-codex', model: SAMPLE_MODEL }
 expanded.default_provider = 'openai-codex'
 expanded.host = hostFor(expanded)
 const codex = expanded.providers.find(row => row.id === 'openai-codex')
-codex.plan = 'Pro'
+codex.plan = SAMPLE_PLAN
 codex.limits = [
   {
     id: 'default',
     label: 'Codex',
     windows: [
-      { label: '5-hour window', remaining_percent: 62, reset_at: '2026-11-11T20:30:00Z' },
-      { label: '7-day window', remaining_percent: 84, reset_at: '2026-11-14T17:00:00Z' }
-    ]
-  },
-  {
-    id: 'spark',
-    label: 'Spark',
-    windows: [
-      { label: '5-hour window', remaining_percent: 36, reset_at: '2026-11-11T21:00:00Z' },
-      { label: '7-day window', remaining_percent: 71, reset_at: '2026-11-14T17:00:00Z' }
+      { label: '5-hour', remaining_percent: 62, reset_at: '2026-11-11T20:30:00Z' },
+      { label: 'Weekly', remaining_percent: 84, reset_at: '2026-11-14T17:00:00Z' }
     ]
   }
 ]
-codex.breakdown = [
-  { id: 'codex', label: 'Codex models', used_percent: 78 },
-  { id: 'spark', label: 'Spark models', used_percent: 22 }
-]
-codex.breakdown_note = 'Share of sample requests in this account’s shared pool.'
 codex.activity = {
   range: '7d',
   requests: 2840,
@@ -169,25 +227,13 @@ codex.cache = {
 }
 codex.pricing = [
   {
-    model: 'gpt-5.6-codex',
+    model: SAMPLE_MODEL,
     input: 1.25,
     output: 10,
     cache_read: 0.125,
     cache_write: 1.25,
     active: true,
-    pricing_version: 'sample-2026-11',
-    source_url: 'https://example.com/rate-card',
-    checked_at: '2026-11-11T15:00:00Z'
-  },
-  {
-    model: 'gpt-5.6-codex-spark',
-    input: 0.5,
-    output: 4,
-    cache_read: 0.05,
-    cache_write: 0.5,
-    pricing_version: 'sample-2026-11',
-    source_url: 'https://example.com/rate-card',
-    checked_at: '2026-11-11T15:00:00Z'
+    pricing_version: 'sample'
   }
 ]
 codex.details = ['Sample extra-usage line for the expanded metrics preview.']
@@ -201,7 +247,7 @@ codex.balances = [
 const resetSummarySample = {
   ...expanded,
   state: 'ready',
-  account_label: 'Codex Pro · sample',
+  account_label: 'Codex Plus · sample',
   identity_id: 'codex:sample-account',
   message: '2 banked resets are available for this account. The server selects one only after an explicit confirmation.',
   reset_executable: true,
@@ -234,7 +280,7 @@ const resetPreviewSample = {
   summary: resetSummarySample,
   confirmation: {
     identity_id: 'codex:sample-account',
-    account_label: 'Codex Pro · sample',
+    account_label: 'Codex Plus · sample',
     available_count: 2,
     applicable_count: 1,
     token: 'sample-confirmation-token-not-submitted'
@@ -247,20 +293,20 @@ const resetPreviewSample = {
 const running = clone(preview)
 running.fetched_at = '2026-11-11T16:20:00Z'
 running.account_profile = 'default'
-running.active = { provider: 'openai-codex', model: 'gpt-5.6-codex' }
+running.active = { provider: 'openai-codex', model: SAMPLE_MODEL }
 running.default_provider = 'openai-codex'
 running.host = hostFor(running)
 const runningCodex = running.providers.find(row => row.id === 'openai-codex')
-runningCodex.plan = 'Plus'
+runningCodex.plan = SAMPLE_PLAN
 runningCodex.limits = [
   {
     id: 'default',
     label: 'Codex',
-    windows: [{ label: '5-hour window', remaining_percent: 62, reset_at: '2026-11-11T20:30:00Z' }]
+    windows: [{ label: '5-hour', remaining_percent: 62, reset_at: '2026-11-11T20:30:00Z' }]
   }
 ]
 runningCodex.balances = []
-runningCodex.accounts = [{ identity_id: 'codex:sample-account', label: 'Codex Pro · sample' }]
+runningCodex.accounts = [{ identity_id: 'codex:sample-account', label: 'Codex Plus · sample' }]
 const runningDeepSeek = running.providers.find(row => row.id === 'deepseek')
 if (runningDeepSeek) {
   runningDeepSeek.accounts = [{ identity_id: 'fp:sample-deepseek', label: 'DeepSeek API · sample' }]
@@ -274,7 +320,7 @@ const runningFixture = fixtureOf(running, {
           parent_id: null,
           depth: 1,
           goal: 'Audit the popover layout at 420px',
-          model: 'gpt-5.6-codex',
+          model: SAMPLE_MODEL,
           provider: 'openai-codex',
           provider_account_id: 'codex:sample-account',
           status: 'running',
@@ -287,7 +333,7 @@ const runningFixture = fixtureOf(running, {
           parent_id: null,
           depth: 1,
           goal: 'Collect the provider payloads',
-          model: 'gpt-5.6-codex',
+          model: SAMPLE_MODEL,
           provider: 'openai-codex',
           provider_account_id: 'codex:unmatched-account',
           status: 'running',
@@ -423,6 +469,10 @@ function htmlPage({ title, fixture, viewportW, viewportH, pane = null, chip = nu
       * { box-sizing:border-box; scrollbar-width:none; }
       *::-webkit-scrollbar { display:none; width:0; height:0; }
       #panel { position:relative; width:${viewportW}px; height:${viewportH}px; overflow:hidden; background:var(--ui-bg-editor, #0d1117); }
+      /* Harness-only footer for a screenshot caption. It lives outside #panel so
+         it can never be mistaken for production component content; the clip is
+         extended below the real element so the note ships in the same PNG. */
+      #shot-annotation { display:none; position:absolute; left:0; top:0; z-index:40; padding:10px 14px 12px; background:var(--ui-bg-editor, #0d1117); border-top:1px solid var(--ui-border-default, rgba(240,246,252,.12)); color:var(--ui-text-secondary, #9aa4b2); font:500 13px/1.5 var(--default-font-family, "Segoe UI", system-ui, sans-serif); }
       ${paneCss}
       ${chipCss}
       ${overlay ? `
@@ -446,6 +496,7 @@ function htmlPage({ title, fixture, viewportW, viewportH, pane = null, chip = nu
       <div id="chip-root"></div>
       <div id="pane-root"></div>
     </div>
+    <div id="shot-annotation" role="note"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>`
@@ -635,6 +686,48 @@ async function measure(cdp, target, padding = 0) {
   })()`)
 }
 
+// Append a readable caption strip below the measured component and extend the
+// capture clip to include it. The strip is a harness sibling of #panel, never
+// part of the shipped plugin, so the annotation cannot leak into production
+// content or the component's own text assertions.
+async function annotateShot(cdp, clip, text, viewportW) {
+  return cdp.eval(`(() => {
+    const host = document.getElementById('shot-annotation');
+    if (!host) return { error: 'annotation host missing' };
+    const width = Math.min(Math.max(${JSON.stringify(clip.width)}, 360), ${JSON.stringify(viewportW)} - ${JSON.stringify(clip.x)});
+    host.textContent = ${JSON.stringify(text)};
+    host.style.display = 'block';
+    host.style.left = ${JSON.stringify(clip.x)} + 'px';
+    host.style.top = ${JSON.stringify(clip.y + clip.height)} + 'px';
+    host.style.width = width + 'px';
+    const rect = host.getBoundingClientRect();
+    const style = getComputedStyle(host);
+    if (!(rect.width > 0 && rect.height > 0)) return { error: 'annotation has no geometry' };
+    return {
+      clip: {
+        x: ${JSON.stringify(clip.x)},
+        y: ${JSON.stringify(clip.y)},
+        width: Math.ceil(rect.right - ${JSON.stringify(clip.x)}),
+        height: Math.ceil(rect.bottom - ${JSON.stringify(clip.y)})
+      },
+      annotation: {
+        text: host.textContent,
+        x: Math.round(rect.x * 100) / 100,
+        y: Math.round(rect.y * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+        height: Math.round(rect.height * 100) / 100,
+        gapCss: Math.round((rect.top - (${JSON.stringify(clip.y + clip.height)})) * 100) / 100,
+        fontSize: style.fontSize,
+        lineHeight: style.lineHeight,
+        color: style.color,
+        outsideComponent: host.closest('#panel') === null,
+        directBodyChild: host.parentElement === document.body,
+        previousSiblingId: host.previousElementSibling?.id || null
+      }
+    };
+  })()`)
+}
+
 const records = []
 async function captureState(cdp, state, viewportW, viewportH) {
   await loadPage(cdp, state.page, viewportW, viewportH)
@@ -647,6 +740,18 @@ async function captureState(cdp, state, viewportW, viewportH) {
     // half-clipped chip at the top edge.
     await cdp.eval(`(() => { const c = document.getElementById('chip-root'); if (c) c.style.visibility = 'hidden'; return true; })()`)
     await sleep(120)
+  }
+  if (state.action === 'expand-provider') {
+    const target = JSON.stringify(`Expand ${state.expandLabel}`)
+    const clicked = await cdp.eval(`(() => {
+      const button = Array.from(document.querySelectorAll('#pane-root button')).find(el => el.getAttribute('aria-label') === ${target});
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`)
+    if (!clicked) throw new Error(`${state.id}: provider row for ${state.expandLabel} missing`)
+    await waitUntil(cdp, `!!Array.from(document.querySelectorAll('#pane-root button')).find(el => el.getAttribute('aria-label') === ${JSON.stringify(`Collapse ${state.expandLabel}`)})`)
+    await sleep(250)
   }
   if (state.action === 'scroll-popover-bottom') {
     await cdp.eval(`(() => { const el = document.querySelector('[data-slot="popover-content"]'); if (!el) return false; el.scrollTop = el.scrollHeight; return true; })()`)
@@ -673,7 +778,7 @@ async function captureState(cdp, state, viewportW, viewportH) {
         return true;
       })()`)
       if (!clickedPreview) throw new Error(`${state.id}: Preview reset button missing`)
-      await waitUntil(cdp, `document.body.innerText.includes('Confirm Codex Pro · sample')`)
+      await waitUntil(cdp, `document.body.innerText.includes('Confirm Codex Plus · sample')`)
       await sleep(300)
     }
   }
@@ -689,12 +794,50 @@ async function captureState(cdp, state, viewportW, viewportH) {
   }
   const measured = await measure(cdp, state.target, state.padding || 0)
   if (measured.error) throw new Error(`${state.id}: ${measured.error}`)
+  // Required text must be a real, visible element whose box sits inside the
+  // saved crop — a text match in innerText is not proof it made the frame.
+  if (state.requireVisible?.length) {
+    const boxes = await cdp.eval(`(() => {
+      const root = document.querySelector('#pane-root') || document.body;
+      return ${JSON.stringify(state.requireVisible)}.map(text => {
+        const leaf = Array.from(root.querySelectorAll('*')).find(node =>
+          node.children.length === 0 && (node.textContent || '').trim() === text
+        );
+        if (!leaf) return { text, found: false };
+        const r = leaf.getBoundingClientRect();
+        const cs = getComputedStyle(leaf);
+        return {
+          text,
+          found: true,
+          x: r.x, y: r.y, width: r.width, height: r.height,
+          visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && Number(cs.opacity) > 0
+        };
+      });
+    })()`)
+    const clip = measured.clip
+    for (const box of boxes) {
+      if (!box.found || !box.visible) throw new Error(`${state.id}: required text not visible: ${JSON.stringify(box.text)}`)
+      const inside = box.x >= clip.x - 0.5 && box.y >= clip.y - 0.5 &&
+        box.x + box.width <= clip.x + clip.width + 0.5 &&
+        box.y + box.height <= clip.y + clip.height + 0.5
+      if (!inside) throw new Error(`${state.id}: required text outside the saved crop: ${JSON.stringify(box)}`)
+      box.insideCrop = true
+    }
+    measured.detail = { ...(measured.detail || {}), boxes }
+  }
   if (state.target === 'chip-button') {
     if (!(measured.rect.width > 0 && measured.rect.height > 0)) throw new Error(`${state.id}: chip has zero size`)
     if (measured.rect.width > 230.5) throw new Error(`${state.id}: chip exceeds the 230px production cap (${measured.rect.width})`)
   }
   if (state.target === 'popover' && measured.rect.width > 356.5) {
     throw new Error(`${state.id}: popover exceeds 356px (${measured.rect.width})`)
+  }
+  let annotation = null
+  if (state.footnote) {
+    const annotated = await annotateShot(cdp, measured.clip, state.footnote, viewportW)
+    if (annotated.error) throw new Error(`${state.id}: ${annotated.error}`)
+    measured.clip = annotated.clip
+    annotation = annotated.annotation
   }
   if (state.target === 'popular-section') {
     const cards = measured.detail?.cards || []
@@ -729,6 +872,7 @@ async function captureState(cdp, state, viewportW, viewportH) {
     scrollIssues: measured.scrollIssues,
     text: measured.text,
     assertText: state.assertText || [],
+    annotation,
     sampleData: true
   })
   console.log(`Captured ${state.id}  ${Math.round(measured.clip.width)}x${Math.round(measured.clip.height)} CSS px`)
@@ -746,6 +890,7 @@ try {
   const states = [
     {
       id: '01-status-chip',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — status-bar chip (sample data)',
       stateLabel: 'Toolbar chip trigger · subscription provider',
       target: 'chip-button',
@@ -760,12 +905,13 @@ try {
       },
       viewportW: 520,
       viewportH: 220,
-      assertText: ['Codex', 'wk 84%'],
+      assertText: ['Codex', '5h 62%'],
       textTarget: '#chip-root',
       caption: 'The status-bar chip is the always-on entry point. It shows the active provider and the governing subscription windows, not a private chat quota.'
     },
     {
       id: '02-popover-current',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — current provider popover (sample data)',
       stateLabel: 'Popover · current provider detail',
       target: 'popover',
@@ -787,6 +933,7 @@ try {
     },
     {
       id: '03-popover-running-agents',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — running agents footer (sample data)',
       stateLabel: 'Popover footer · verified pool and unknown account',
       target: 'popover',
@@ -808,10 +955,13 @@ try {
     },
     {
       id: '04-overview-multi-provider',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — full page, multiple providers (sample data)',
       stateLabel: 'Full page · subscription and credit providers',
       target: 'pane-full',
       padding: 0,
+      action: 'expand-provider',
+      expandLabel: 'OpenRouter',
       page: {
         title: 'overview-multi-provider',
         fixture: fixtureOf(multiProvider),
@@ -822,14 +972,16 @@ try {
       },
       viewportW: FULL_W,
       viewportH: PAGE_H,
-      assertText: ['Provider usage', 'OTHER PROVIDERS', 'DeepSeek', 'OpenCode', '$8.72'],
+      assertText: ['Provider usage', 'OTHER PROVIDERS', 'OpenRouter', 'SAMPLE CREDIT BALANCE', '$24.18', 'DeepSeek', '$8.72', 'Codex'],
+      requireVisible: ['OpenRouter', 'Sample credit balance', '$24.18', '$8.72', 'DeepSeek'],
       textTarget: '#pane-root',
-      caption: 'The full page keeps subscription windows and credit balances together: the active Codex allowance, DeepSeek API credit, OpenCode Go, Ollama Cloud, and an xAI sample row. On stock 0.23.1 the xAI row shows an official account link instead of credits.'
+      caption: 'The full page keeps subscription windows and credit balances together: the active Codex allowance, OpenRouter API credit (opened to show its labelled sample balance), DeepSeek API credit, OpenCode Go, and Ollama Cloud. The xAI row stays unavailable — stock Hermes 0.23.1 has no xAI broker — and points at the official Grok dashboard instead of inventing credits.'
     },
     {
       id: '05-overview-expanded-metrics',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — expanded active-provider metrics (sample data)',
-      stateLabel: 'Expanded metrics · activity, cache, rates, pool breakdown',
+      stateLabel: 'Expanded metrics · activity, cache, rates',
       target: 'active-section',
       padding: 0,
       page: {
@@ -842,9 +994,9 @@ try {
       },
       viewportW: FULL_W,
       viewportH: PAGE_H,
-      assertText: ['Activity', 'Prompt cache', 'Rates', 'Usage breakdown', '2,840 requests'],
+      assertText: ['Activity', 'Prompt cache', 'Rates', '$18.42', '2,840 requests'],
       textTarget: '#pane-root',
-      caption: 'When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, published token rates, and the shared-pool breakdown. Not every provider returns every field.'
+      caption: 'When an adapter supplies them, the active card extends to activity, prompt-cache efficiency, and published token rates. Counters, rates, and requests here are sample values; not every provider returns every field.'
     },
     {
       id: '06-popular-connections',
@@ -928,6 +1080,7 @@ try {
     },
     {
       id: '10-narrow-420',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — narrow responsive pane (sample data)',
       stateLabel: 'Narrow layout · 420px pane',
       target: 'pane-full',
@@ -948,6 +1101,7 @@ try {
     },
     {
       id: '11-reset-summary',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — banked reset summary (sample data)',
       stateLabel: 'Codex reset · read-only summary',
       target: 'active-section',
@@ -963,12 +1117,13 @@ try {
       },
       viewportW: FULL_W,
       viewportH: PAGE_H,
-      assertText: ['Banked reset credits', 'Resets available', 'Active account: Codex Pro · sample', '2 banked resets are available', 'Preview reset'],
+      assertText: ['Banked reset credits', 'Resets available', 'Active account: Codex Plus · sample', '2 banked resets are available', 'Preview reset'],
       textTarget: '#pane-root',
       caption: 'The stock-native reset panel reads the active Codex account only. This is a fixture summary: 2 banked resets, 1 usable now, with provider-reported inventory. No reset was redeemed.'
     },
     {
       id: '12-reset-confirm',
+      footnote: CODEX_5H_FOOTNOTE,
       title: 'Provider Usage — reset confirmation preview (sample data)',
       stateLabel: 'Codex reset · confirmation preview, not executed',
       target: 'active-section',
@@ -984,7 +1139,7 @@ try {
       },
       viewportW: FULL_W,
       viewportH: PAGE_H,
-      assertText: ['Confirm Codex Pro · sample', '2 banked; 1 usable now', 'Confirm reset on Codex Pro · sample', 'This spends one banked reset'],
+      assertText: ['Confirm Codex Plus · sample', '2 banked; 1 usable now', 'Confirm reset on Codex Plus · sample', 'This spends one banked reset'],
       textTarget: '#pane-root',
       caption: 'Preview/confirm is separately gated. This fixture stops at the confirmation preview; the confirm button is visible but was never clicked, and no reset was redeemed.'
     }
