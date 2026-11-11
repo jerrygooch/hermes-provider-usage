@@ -8,8 +8,11 @@ and the stock install path are in [hackathon-guide.md](hackathon-guide.md) and
 
 - **Stock compatibility.** Provider Usage 0.10 loads on stock Hermes 0.23.1 with no core
   patch and no private worktree. The manifest floor is `requires_hermes: ">=0.23.1"`.
-- **Automated tests.** The focused release suite passes (56 focused tests, 0 failures;
-  parent verification at `fd895ea`). The full repository gate is `npm run check`.
+- **Automated tests.** The route-level reset regression passes (5 tests: preview → confirm
+  through the registered HTTP routes, single-use replay, expiry, cross-session and
+  cross-account rejection). The full repository gate is `npm run check`: **214 tests,
+  11 skipped, 0 failures**. Release procedure: pin the exact tested SHA at freeze time;
+  this document does not embed its own commit hash.
 - **Browser visual package.** The screenshots and gallery, the infographic, and the demo
   are **browser component-renderer** output from the real plugin and SDK primitives with
   synthetic fixtures. They are not packaged-Electron screenshots and not live provider

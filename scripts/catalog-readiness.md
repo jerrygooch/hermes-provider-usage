@@ -6,7 +6,11 @@ restart was performed by this lane.
 ## Candidate and manifest
 
 - Repository: this checkout (`hermes-provider-usage-ext`)
-- Source HEAD inspected: `fd895ea` (`fix(reset): require verified readback and exact identities`)
+- Source HEAD inspected: the tested release tree. Its exact 40-character SHA is pinned by
+  the parent release step and deliberately not embedded here (a commit cannot cite its
+  own hash). The production reset fix is `_reset_confirmation_store` in
+  `dashboard/plugin_api.py` (one short-lived store per profile/account/session across HTTP
+  requests), with confirm rechecks in `dashboard/reset_service.py`.
 - Version: `0.10.0`
 - Manifest: root `plugin.yaml`
 - Hermes floor: `requires_hermes: ">=0.23.1"` — the released stock baseline. No unmerged
@@ -67,12 +71,15 @@ Do not vendor or patch core to hide the warning.
   OpenCode Go hook; `credentialed_provider_request("xai-oauth", ...)` only when the host
   brokers it; `agent.secret_scope.get_secret` for API-key and declarative paths. No
   runtime token, credential pool, or auth store is read by plugin code.
-- The focused release suite passes (parent verification: 56 focused tests, 0 failures).
-  The full repository gate `npm run check` passes in this worktree: **208 tests, 11
-  skipped, 0 failures**, plus the Node suites and bundled-definition validation. Live
-  provider accounts were not exercised for the Claude, Gemini, or Z.ai cards.
+- The route-level reset regression passes (5 tests in `tests/test_reset_http_routes.py`
+  against the registered HTTP preview/confirm routes, including replay, expiry,
+  cross-session and cross-account rejection). The full repository gate `npm run check`
+  passes in this worktree: **214 tests, 11 skipped, 0 failures**, plus the Node suites and
+  bundled-definition validation. Live provider accounts were not exercised for the Claude,
+  Gemini, or Z.ai cards.
 - The catalog entry is **not created**. Publication is owned by the parent release
-  process and needs an explicit exact 40-character SHA (`fd895ea` plus any final commit),
+  process and needs the exact 40-character SHA of the final tested commit (pinned at
+  release freeze; not embedded in this file to avoid a self-referential hash),
   `repo: https://github.com/jerrygooch/hermes-provider-usage`, `maintainer: jerrygooch`,
   `category: desktop`, `version: "0.10.0"`, and `requires_hermes: ">=0.23.1"`. Include the
   UI screenshots and the provider-network/credential disclosure required by the catalog.

@@ -4930,6 +4930,13 @@ def _clean_reset_identity(value: Any) -> Optional[str]:
 
 _RESET_SERVICE_MODULE: Optional[Any] = None
 _RESET_SERVICE_MODULE_LOCK = threading.Lock()
+# Preview and confirm are separate HTTP requests, so the short-lived
+# single-use confirmation store must outlive one ResetService construction.
+# One store per (profile, account, dashboard session) keeps tokens isolated
+# without sharing them across identities or sessions.
+_RESET_STORES: dict[tuple[str, str, str], Any] = {}
+_RESET_STORES_LOCK = threading.Lock()
+_MAX_RESET_STORES = 256
 _RESET_SERVICE_UNAVAILABLE = (
     "Reset support is unavailable because this installed build is missing its reset service. "
     "Nothing was spent."
@@ -5036,6 +5043,20 @@ def _reset_session_id(request: Request, profile: Optional[str]) -> Optional[str]
     return None
 
 
+def _reset_confirmation_store(module: Any, profile: Optional[str], identity_id: Optional[str],
+                              session_id: Optional[str]) -> Any:
+    """Return the process-wide short-lived store for this exact reset scope."""
+    key = (_clean_profile(profile) or "default", identity_id or "", session_id or "")
+    with _RESET_STORES_LOCK:
+        store = _RESET_STORES.get(key)
+        if store is None:
+            if len(_RESET_STORES) >= _MAX_RESET_STORES:
+                _RESET_STORES.pop(next(iter(_RESET_STORES)))
+            store = module.ResetConfirmationStore()
+            _RESET_STORES[key] = store
+        return store
+
+
 def _reset_service_for(
     request: Request,
     profile: Optional[str],
@@ -5047,10 +5068,13 @@ def _reset_service_for(
     if module is None:
         return _UnavailableResetService()
     try:
+        session_id = _reset_session_id(request, profile) if require_session else None
+        store = _reset_confirmation_store(module, profile, identity_id, session_id) if require_session else None
         return module.ResetService(
             profile=profile,
             identity_id=identity_id,
-            session_id=_reset_session_id(request, profile) if require_session else None,
+            session_id=session_id,
+            store=store,
         )
     except Exception:
         log.debug("provider-usage reset service could not be constructed", exc_info=True)

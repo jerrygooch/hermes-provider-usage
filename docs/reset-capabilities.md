@@ -1,8 +1,9 @@
 # Reset capabilities: read-only inventory, expiry, and settings links
 
-Status: **historical design and audit record**, updated for the implementation at
-`fd895ea`. The current behavior is the preview → confirm service described in
-`dashboard/reset_service.py`: it exposes read-only summary, preview, confirm, and
+Status: **historical design and audit record**, updated for the current implementation:
+the route-level, profile/account/session-scoped confirmation store in
+`dashboard/plugin_api.py` and the preview → confirm service in
+`dashboard/reset_service.py`. The service exposes read-only summary, preview, confirm, and
 readback routes; the server selects the credit; no credit selector, force flag, caller
 URL, or purchase flag is accepted; success requires an independent same-identity
 readback with a lower count; and a missing or mismatched readback is `uncertain`, never

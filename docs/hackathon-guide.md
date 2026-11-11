@@ -172,11 +172,14 @@ python harness/hackathon-finalize.py
 The capture script asserts the chip's positive geometry inside its 230 px production cap, the 356 px popover, the current-provider windows, the running-agent footer text, the popular-card section with all three cards, catalog states, and the absence of inner scroll clipping. It does not assert a live gateway.
 
 At the pre-freeze capture point, the stock compatibility suite passed. The current
-release-focused suite passes **56 focused tests with 0 failures** (parent verification at
-`fd895ea`); the full repository gate is `npm run check`. The Node
+release-focused suite passes with 0 failures; the full repository
+gate is `npm run check` (**214 tests, 11 skipped, 0 failures**). The Node
 logic/render/lifecycle/running-agent suites, the connection-card tests, and the packaged
 definition validation are part of that gate. Re-run it against the frozen stock build
-before publishing; the visual harness does not open a live gateway.
+before publishing; the visual harness does not open a live gateway. Pin the exact tested
+SHA at release freeze; the production reset fix is the route-level scoped confirmation
+store in `dashboard/plugin_api.py`, so this guide does not quote its own future commit
+hash.
 
 ## Known limitations
 
@@ -184,7 +187,7 @@ before publishing; the visual harness does not open a live gateway.
 - The three popular-provider cards are fixture-tested, not live-tested. Gemini and Z.ai have no account-usage read in this build.
 - Anthropic API Admin usage is not read; only the existing Claude Code OAuth subscription snapshot is supported.
 - The packaged Electron app was not launched for these images. The component harness is the evidence tier; the release owner may refresh the images against the frozen build.
-- **Screenshot snapshot:** pre-freeze visual capture, with the read-only reset summary and confirmation preview rendered from fixture data. The current code is `fd895ea`; captures 11–12 stop at the preview, the confirm button was never clicked, and no reset was redeemed. The release owner may refresh the images against the frozen build.
+- **Screenshot snapshot:** pre-freeze visual capture, with the read-only reset summary and confirmation preview rendered from fixture data. The current code includes the route-level scoped confirmation store (`_reset_confirmation_store` in `dashboard/plugin_api.py`) with rechecks in `dashboard/reset_service.py`; pin the exact tested SHA at release freeze. Captures 11–12 stop at the preview, the confirm button was never clicked, and no reset was redeemed. The release owner may refresh the images against the frozen build.
 - A profile's backend is separate; a missing backend is shown explicitly and never auto-installed.
 - Provider APIs change. Experimental adapters (SuperGrok, Ollama Cloud, Nous Portal) can regress without notice.
 - The definition cache is in-process; a restart starts cold.
