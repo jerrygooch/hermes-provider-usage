@@ -71,11 +71,10 @@ function check(name, condition) {
   }
 }
 
-// ── Scope resolution: ctx.rest physically targets the ACTIVE socket source ──
-// The account ctx.rest queries is identified by connection+profile, not profile
-// alone. A focused session is interpretable ONLY when its connection-qualified
-// owner matches that active source; anything else fails closed (diverged) and
-// the pane/chip gate instead of fetching or probing a foreign account.
+// ── Scope resolution: active socket + optional local-profile scope ──
+// ctx.rest always dials the active socket, but the backend can scope credential
+// reads to a named local profile. A focused chat on the SAME connection may fetch
+// that profile; a focused chat on ANOTHER connection is unreachable and gates.
 
 // Normal single-socket genuine profile-switch case: focus owner == active source.
 const plain = resolveUsageScope({
@@ -96,17 +95,20 @@ check('focus==active: sourceId is connection-qualified', activeSourceId('local',
 const legacy = resolveUsageScope({ focusedOwner: null, hasFocusedOwner: false, focusedProfile: 'default', activeConnectionId: 'local', activeProfile: 'default' })
 check('legacy focus==active: fetch active, not diverged', legacy.fetchProfile === 'default' && legacy.diverged === false)
 
-// Divergence: focused bot tile on Alice, socket homed on default.
-const diverged = resolveUsageScope({
+// Local bot profile: focused tile on Alice, socket homed on default. Same
+// connection, so the backend scopes credential reads to Alice instead of making
+// the user switch profiles (v0.9 scope behavior).
+const localBot = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
   hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: 'local',
   activeProfile: 'default'
 })
-check('focus!=active: fetched/keyed scope stays the ACTIVE socket source', diverged.fetchProfile === 'default')
-check('focus!=active: divergence is surfaced (fail closed)', diverged.diverged === true)
-check('focus!=active: focus identity preserved for the gate', diverged.focusProfile === 'Alice')
+check('focus!=active (same connection): fetch the focused local profile', localBot.fetchProfile === 'Alice')
+check('focus!=active (same connection): not unreachable', localBot.diverged === false && localBot.unreachable === false)
+check('focus!=active: focus identity preserved', localBot.focusProfile === 'Alice')
+check('focus!=active: source is focused-profile', localBot.source === 'focused-profile')
 
 // #1 SAME-PROFILE REMOTE COLLISION: names both "Alice" but different
 // connections — the focused remote chat must NOT be treated as the active
@@ -118,19 +120,19 @@ const sameProfileRemote = resolveUsageScope({
   activeConnectionId: 'remote-main',
   activeProfile: 'Alice'
 })
-check('#1 same-profile remote: names match but connections differ -> DIVERGED', sameProfileRemote.diverged === true)
-check('#1 same-profile remote: never guesses same account', sameProfileRemote.source === 'foreign')
+check('#1 same-profile remote: names match but connections differ -> UNREACHABLE', sameProfileRemote.diverged === true && sameProfileRemote.unreachable === true)
+check('#1 same-profile remote: never guesses foreign account', sameProfileRemote.source === 'remote' && sameProfileRemote.fetchProfile === 'Alice')
 
-// #1 FAIL-CLOSED: active source identity unavailable -> cannot verify focus.
-const unverifiable = resolveUsageScope({
+// An explicit local owner remains local when the active socket omits its
+// connection id (older SDKs use '' for the local connection).
+const localNoConn = resolveUsageScope({
   focusedOwner: { connectionId: 'local', profile: 'Alice' },
   hasFocusedOwner: true,
   focusedProfile: 'Alice',
   activeConnectionId: '',
   activeProfile: 'Alice'
 })
-check('#1 unverifiable active source: fail closed -> DIVERGED', unverifiable.diverged === true)
-check('#1 unverifiable: never serves data under an unverified account', unverifiable.source === 'foreign')
+check('explicit local owner + missing active conn resolves local', localNoConn.unreachable === false && localNoConn.fetchProfile === 'Alice')
 
 // Authoritative ambiguity: the SDK publishes the owner atom but its value is
 // null (unresolved/ambiguous focused id) — the profile-only fallback must NOT
@@ -142,7 +144,7 @@ const ambiguous = resolveUsageScope({
   activeConnectionId: 'local',
   activeProfile: 'default'
 })
-check('#10 present-but-null focus owner fails closed (never profile-only bypass)', ambiguous.diverged === true && ambiguous.source === 'ambiguous')
+check('#10 present-but-null focus owner fails closed (never profile-only bypass)', ambiguous.ambiguous === true && ambiguous.unreachable === true && ambiguous.source === 'ambiguous' && ambiguous.fetchProfile === 'default')
 
 // Absent legacy half-shape: focusedProfile missing entirely -> active wins.
 const absent = resolveUsageScope({ focusedOwner: null, hasFocusedOwner: false, focusedProfile: '', activeConnectionId: 'worker', activeProfile: 'worker' })
@@ -165,18 +167,18 @@ check('stuck gateway does NOT settle before the window', shouldSettleProfileSwit
 check('no switch in flight needs no settling', shouldSettleProfileSwitch(false, false, 0, 12_000) === false)
 
 // ── Query key: stable source, NO gateway state (reconnect must not lose rows) ──
-const keyA = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'))
-const keyB = providerUsageQueryKey('Bob', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Bob'))
+const keyA = providerUsageQueryKey('Alice', activeSourceId('local', 'Alice'))
+const keyB = providerUsageQueryKey('Bob', activeSourceId('local', 'Bob'))
 check('keys differ across fetch sources', JSON.stringify(keyA) !== JSON.stringify(keyB))
-check('key carries the FETCH source, not a focus hint', JSON.stringify(keyA) !== JSON.stringify(providerUsageQueryKey('focus-alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'))))
+check('key carries the FETCH source, not a focus hint', JSON.stringify(keyA) !== JSON.stringify(providerUsageQueryKey('focus-alice', activeSourceId('local', 'Alice'))))
 
 // Same profile name on a DIFFERENT connection keys differently (no collision).
-const keyAliceRemote = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('remote-main', 'Alice'))
+const keyAliceRemote = providerUsageQueryKey('Alice', activeSourceId('remote-main', 'Alice'))
 check('#1 cache key is connection-qualified (no same-profile collision)', JSON.stringify(keyA) !== JSON.stringify(keyAliceRemote))
 
-// The /overview payload is provider+model; the session does not change the
-// request, so it must not fragment the cache (pane + chip share ONE key).
-check('session id does not fragment the usage cache', JSON.stringify(keyA) === JSON.stringify(providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', activeSourceId('local', 'Alice'), 'any-session-id')))
+// The overview payload is account-wide; a session id must not fragment the
+// cache (pane + chip share ONE key). The key builder ignores extra args.
+check('session id does not fragment the usage cache', JSON.stringify(keyA) === JSON.stringify(providerUsageQueryKey('Alice', activeSourceId('local', 'Alice'), 'any-session-id')))
 // The key carries NO gateway slot: a reconnect with the SAME source yields the
 // SAME key, so the last cached rows survive and render stale. (Live reconnect
 // retention is exercised in the mounted hook harness; here we pin the shape.)

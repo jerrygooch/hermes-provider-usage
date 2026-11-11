@@ -211,14 +211,16 @@ async function harness(initial = {}) {
     get lastQueryKey() { return lastQueryKey },
     readonly: atoms,
     remembered: key => mod.namespace.rememberedProvider(key),
+    rememberedSession: sessionId => mod.namespace.rememberedSessionProvider(sessionId),
     scopeOf: arg => mod.namespace.resolveUsageScope(arg),
-    usageKey: (fetchProfile, provider, model, source) => mod.namespace.providerUsageQueryKey(fetchProfile, provider, model, source)
+    usageKey: (fetchProfile, source) => mod.namespace.providerUsageQueryKey(fetchProfile, source)
   }
 }
 
-const fixture = () => ({
+const fixture = (account = 'default') => ({
   version: 1,
   fetched_at: '2026-09-07T12:00:00Z',
+  account_profile: account,
   active: { provider: 'xai-oauth', model: 'mimo-v2.5' },
   default_provider: 'xai-oauth',
   providers: [
@@ -230,11 +232,12 @@ const fixture = () => ({
 
 // ── S1: Verified focus mounts the normal account readout (no gate). ─────────
 {
-  const h = await harness({ sessionId: undefined, focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
+  const h = await harness({ sessionId: 'sess-1', focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
   h.setQuery({ data: fixture(), isLoading: false, isError: false })
   await h.mountChip()
+  await h.inAct(async () => { h.requests[0].resolve({ info: { provider: 'xai-oauth' } }) })
   check('S1 verified focus shows the active provider funding', h.text().includes('62% left'), h.text())
-  check('S1 verified focus does not gate', !h.text().includes('Switch the active profile'), h.text())
+  check('S1 verified focus does not gate', !h.text().includes('Other connection'), h.text())
   h.unmount()
 }
 
@@ -256,12 +259,12 @@ const fixture = () => ({
 
   // B resolves first: the current session owns the provider.
   await h.inAct(async () => { reqB.resolve({ info: { provider: 'anthropic' } }) })
-  check('S2 current session B (anthropic) wins', h.remembered(sourceKey) === 'anthropic', h.remembered(sourceKey))
+  check('S2 current session B (anthropic) wins', h.rememberedSession('sess-B') === 'anthropic', h.rememberedSession('sess-B'))
   check('S2 chip reflects B provider', h.text().includes('40% left'), h.text())
 
   // A resolves LATE for the superseded session: must be dropped, not applied.
   await h.inAct(async () => { reqA.resolve({ info: { provider: 'xai-oauth' } }) })
-  check('S2 late response for superseded A does NOT win', h.remembered(sourceKey) === 'anthropic', h.remembered(sourceKey))
+  check('S2 late response for superseded A does NOT win', h.rememberedSession('sess-B') === 'anthropic' && h.rememberedSession('sess-A') === '', `${h.rememberedSession('sess-B')}/${h.rememberedSession('sess-A')}`)
   check('S2 chip stays on B provider after late A (no A-B reversal)', h.text().includes('40% left') && !h.text().includes('62% left'), h.text())
   h.unmount()
 }
@@ -324,27 +327,28 @@ const fixture = () => ({
   h.unmount()
 }
 
-// ── S6: Fail-closed divergence — focused chat on Alice but active socket on
-//        default: gate BOTH surfaces and issue NO fetch/probe for the foreign
-//        account (no session.status request, no /overview subscription). ─────
+// ── S6: Local bot profile — focused chat on Alice, active socket on default,
+//        both on THIS machine: fetch Alice with profile scope (v0.9 behavior),
+//        not a forced profile switch and not a foreign-connection gate. ─────
 {
   const h = await harness({ sessionId: 'sess-alice', focusedOwner: { connectionId: 'local', profile: 'Alice' }, focusedProfile: 'Alice' })
-  h.setQuery({ data: fixture(), isLoading: false, isError: false })
+  h.setQuery({ data: fixture('Alice'), isLoading: false, isError: false })
   await h.mountPage()
-  check('#2 diverged pane gates (names the focus profile)', h.text().includes('focused chat is in Alice'), h.text())
-  check('#2 diverged pane tells the user to switch', h.text().includes('Switch to Alice to view its provider usage'), h.text())
-  check('#2 diverged pane does NOT fetch for the foreign account', h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
-  check('#2 diverged pane does NOT probe the foreign session', h.requests.length === 0, JSON.stringify(h.requests))
-  check('#2 diverged pane does NOT display active-account rows', !h.text().includes('Account limits'), h.text())
+  await h.inAct(async () => { h.requests[0].resolve({ info: { provider: 'xai-oauth' } }) })
+  check('#2 local bot pane scopes the query key to Alice', JSON.stringify(h.lastQueryKey).includes('Alice'), JSON.stringify(h.lastQueryKey))
+  check('#2 local bot pane shows the focused profile rows', h.text().includes('Account limits') && h.text().includes('62% left'), h.text())
+  check('#2 local bot pane is not gated', !h.text().includes('another connection'), h.text())
   h.unmount()
 }
 
-// ── S6b: Same chip fails closed on divergence (no foreign-account accounting). ─
+// ── S6b: Chip follows the same local-profile scope. ───────────────────────────
 {
   const h = await harness({ sessionId: 'sess-alice', focusedOwner: { connectionId: 'local', profile: 'Alice' }, focusedProfile: 'Alice' })
+  h.setQuery({ data: fixture('Alice'), isLoading: false, isError: false })
   await h.mountChip()
-  check('#2 diverged chip gates', h.text().includes('Usage on Alice'), h.text())
-  check('#2 diverged chip does not fetch', h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  await h.inAct(async () => { h.requests[0].resolve({ info: { provider: 'xai-oauth' } }) })
+  check('#2 local bot chip shows Alice usage', h.text().includes('62% left'), h.text())
+  check('#2 local bot chip is not gated', !h.text().includes('Other connection'), h.text())
   h.unmount()
 }
 
@@ -355,7 +359,7 @@ const fixture = () => ({
   const scope = h.scopeOf({ focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'remote-main', activeProfile: 'Alice' })
   check('#1 same-profile remote: diverged at resolve level', scope.diverged === true, JSON.stringify(scope))
   await h.mountPage()
-  check('#1 same-profile remote: pane gates (no wrong-account data)', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  check('#1 same-profile remote: pane gates (no wrong-account data)', h.text().includes('Alice is on another connection') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
   check('#1 same-profile remote: no probe of the foreign session', h.requests.length === 0, JSON.stringify(h.requests))
   h.unmount()
 }
@@ -375,7 +379,7 @@ const fixture = () => ({
   const h = await harness({ sessionId: undefined, focusedOwner: { connectionId: 'local', profile: 'default' }, focusedProfile: 'default' })
   h.setQuery({ data: fixture(), isLoading: false, isError: true, isFetching: false, error: new Error('boom') })
   await h.mountPage()
-  check('#5 refetch-error keeps the stale rows', h.text().includes('Account limits'), h.text())
+  check('#5 refetch-error keeps the stale rows', h.text().includes('62% left'), h.text())
   check('#5 refetch-error surfaces a stale banner', h.text().includes('Could not refresh'), h.text())
   h.unmount()
 }
@@ -395,7 +399,7 @@ const fixture = () => ({
   const scope = h.scopeOf({ focusedOwner: null, hasFocusedOwner: true, focusedProfile: 'Alice', activeConnectionId: 'local', activeProfile: 'default' })
   check('#10 null focus-owner resolves as diverged (never profile-only bypass)', scope.diverged === true && scope.source === 'ambiguous', JSON.stringify(scope))
   await h.mountPage()
-  check('#10 ambiguous focus gates instead of fetching active rows', h.text().includes('focused chat is in Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  check('#10 ambiguous focus gates instead of fetching active rows', h.text().includes('Account scope could not be identified') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
   check('#10 ambiguous focus does not display active-account data', !h.text().includes('Account limits'), h.text())
   h.unmount()
 }
@@ -408,7 +412,7 @@ const fixture = () => ({
   const h = await harness({ sessionId: 'sess-A', connectionId: 'remote-main', profile: 'Alice', focusedOwner: { connectionId: 'remote-focus', profile: 'Alice' }, focusedProfile: 'Alice', gateway: 'open' })
   // active socket on remote-main:Alice diverges from focus remote-focus:Alice → gated.
   await h.mountChip()
-  check('#11 same-profile different-connection chip gates (no foreign accounting)', h.text().includes('Usage on Alice') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
+  check('#11 same-profile different-connection chip gates (no foreign accounting)', h.text().includes('Other connection') && h.queryCalls === 0, `queryCalls=${h.queryCalls}`)
   h.unmount()
 }
 
@@ -419,7 +423,7 @@ const fixture = () => ({
   const h = await harness({ sessionId: 'sess-cf', focusedOwner: { connectionId: 'local', profile: 'chaosforge' }, focusedProfile: 'chaosforge', connectionId: 'local', profile: 'chaosforge', gateway: 'open' })
   h.setQuery({ data: null, isLoading: false, isError: true, isFetching: false, error: { status: 404, message: 'plugin namespace not enabled' } })
   await h.mountChip()
-  check('#7 chip says backend not enabled on the active profile', h.text().includes('not enabled in chaosforge'), h.text())
+  check('#7 chip says backend not enabled on the active profile', h.text().includes('Not enabled in chaosforge'), h.text())
   check('#7 chip does NOT fall back to a generic "unavailable"', !/Usage · unavailable/.test(h.text()), h.text())
   check('#7 chip does not show a wrong-account figure', !h.text().includes('62% left') && !h.text().includes('40% left'), h.text())
   h.unmount()
@@ -447,9 +451,9 @@ const fixture = () => ({
   check('#8 return-to-default scope is verified again (recovery not gated)', r2.diverged === false && r2.fetchProfile === 'default', JSON.stringify(r2))
   // Source-qualified keys: chaosforge and default accounts never collide, and the
   // return restores the exact default source key (recover the right account).
-  const kDefault = h.usageKey('default', '', '', 'local::default')
-  const kChaos = h.usageKey('chaosforge', '', '', 'local::chaosforge')
-  check('#8 round-trip keys are source-distinct and stable', JSON.stringify(kDefault) !== JSON.stringify(kChaos) && JSON.stringify(kDefault) === JSON.stringify(h.usageKey('default', '', '', 'local::default')), JSON.stringify(kDefault))
+  const kDefault = h.usageKey('default', 'local::default')
+  const kChaos = h.usageKey('chaosforge', 'local::chaosforge')
+  check('#8 round-trip keys are source-distinct and stable', JSON.stringify(kDefault) !== JSON.stringify(kChaos) && JSON.stringify(kDefault) === JSON.stringify(h.usageKey('default', 'local::default')), JSON.stringify(kDefault))
   h.unmount()
 }
 

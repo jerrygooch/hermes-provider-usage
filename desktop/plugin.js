@@ -71,63 +71,71 @@ function rememberedProvider(scopedKey) {
   return lastFocusedProviders.get(scopedKey) || ''
 }
 
+// Per chat, not per profile. A profile-wide memory made every chat inherit
+// whichever account last emitted an event (a Codex chat stuck the Grok chip
+// on Codex until a later event happened to correct it).
+const sessionProviders = new Map()
+
+function rememberedSessionProvider(sessionId) {
+  return sessionId ? sessionProviders.get(sessionId) || '' : ''
+}
+
+function rememberSessionProvider(sessionId, provider) {
+  const value = normaliseProvider(provider)
+  if (!sessionId || !value) return ''
+  sessionProviders.set(sessionId, value)
+  return value
+}
+
 function providerScopeKey(sourceId, sessionId) {
   return `${sourceId}::${String(sessionId || '__workspace__')}`
 }
 
-// The plugin's REST door (ctx.rest) routes on the ACTIVE socket connection and
-// profile — it cannot be pinned to the FOCUSED chat's profile. So the fetched
-// and cached scope is always the ACTIVE account, identified by its
-// connection-qualified source (host.state.connectionId + host.state.profile).
-// A focused session is only safe to interpret when its owner (connection +
-// profile) matches that active source; otherwise it is a DIVERGENCE and must
-// fail closed (gate, no fetch/probe), never guessed — a same-profile remote
-// would otherwise show one account's data under another's focus.
+function connectionKey(value) {
+  const text = String(value || '').trim()
+  return text === 'local' ? '' : text
+}
+
+// ctx.rest always dials the active socket, but the backend can scope credential
+// reads to a named local profile. Same machine, different bot: fetch THAT
+// profile. A different connection is another machine — a shared profile name
+// must not borrow this machine's copy.
 function resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile }) {
   const active = String(activeProfile || '').trim() || 'default'
-  const activeSource = activeSourceId(activeConnectionId, active)
-  const ownerConnection = String(activeConnectionId || '').trim()
-  // Newer SDK publishes the connection-qualified focus owner atom. Authority is
-  // on that atom: an EXPLICIT null means the SDK could not resolve the focused
-  // chat to one owner (ambiguous/unresolved id) and fails closed. Never fall
-  // back to the profile-only ladder in that case — doing so could fetch a
-  // foreign account (or serve one account's data) under the focused chat's
-  // ambiguous name.
+  const activeConn = connectionKey(activeConnectionId)
+  const alias = String(focusedProfile || '').trim()
+  let focus = alias || active
+  let focusConn = activeConn
+  let focusConnKnown = false
+  let ambiguous = false
+
   if (hasFocusedOwner) {
     if (!focusedOwner || typeof focusedOwner?.profile !== 'string') {
-      const focus = String(focusedProfile || '').trim() || active
-      return {
-        fetchProfile: active,
-        focusProfile: focus,
-        diverged: true,
-        source: 'ambiguous',
-        sourceId: activeSource,
-        ownerConnection
-      }
-    }
-    const focus = String(focusedOwner.profile).trim() || active
-    const focusSource = activeSourceId(focusedOwner?.connectionId, focus)
-    const verified = Boolean(activeSource) && focusSource === activeSource
-    return {
-      fetchProfile: active,
-      focusProfile: focus,
-      diverged: !verified,
-      source: verified ? 'active' : 'foreign',
-      sourceId: activeSource,
-      ownerConnection
+      // The SDK publishes the owner atom but cannot resolve the focused chat to
+      // one owner. The profile-only alias is NOT authority: another connection
+      // can use the same profile name, so fail closed and gate.
+      ambiguous = true
+      focus = alias || active
+    } else {
+      focus = String(focusedOwner.profile).trim() || alias || active
+      focusConnKnown = focusedOwner.connectionId != null && String(focusedOwner.connectionId).trim() !== ''
+      focusConn = focusConnKnown ? connectionKey(focusedOwner.connectionId) : activeConn
     }
   }
-  // Older SDK build with NO focus-owner atom (feature absent): no cross-connection
-  // focus exists there, so profile parity is the honest check.
-  const alias = String(focusedProfile || '').trim()
-  const focus = alias || active
-  const diverged = Boolean(alias) && alias !== active
+
+  const otherMachine = focusConnKnown && focusConn !== activeConn
+  const unreachable = otherMachine || ambiguous
+  const fetchProfile = unreachable ? active : focus
+  const ownerConnection = otherMachine ? String(activeConnectionId || '').trim() : String((focusConnKnown ? focusedOwner.connectionId : activeConnectionId) || '').trim()
   return {
-    fetchProfile: active,
+    activeProfile: active,
+    fetchProfile,
     focusProfile: focus,
-    diverged,
-    source: diverged ? 'foreign-profile' : 'active',
-    sourceId: activeSource,
+    diverged: unreachable,
+    unreachable,
+    ambiguous,
+    source: otherMachine ? 'remote' : ambiguous ? 'ambiguous' : fetchProfile === active ? 'active' : 'focused-profile',
+    sourceId: activeSourceId(unreachable ? activeConnectionId : ownerConnection, fetchProfile),
     ownerConnection
   }
 }
@@ -136,13 +144,13 @@ function resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, acti
 // same account would otherwise change the key and lose the already-cached rows,
 // making the "reconnecting keeps the last data" claim false. The stable source
 // (connection+profile) is what identifies the account, and it survives reconnects.
-function providerUsageQueryKey(fetchProfile, provider, model, source) {
+function providerUsageQueryKey(fetchProfile, source) {
+  // One cache per account. Chat switches must not refetch or flash another
+  // provider's cached query — the chip picks the row client-side.
   return [
     'provider-usage',
     'overview',
     profileScope(fetchProfile),
-    provider || '',
-    model || '',
     source || profileScope(fetchProfile)
   ]
 }
@@ -217,39 +225,40 @@ function eventOwns(event, sessionId, ownerSource, ownerProfile) {
 
 function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '', ownerSource = '', ownerScopedKey = '') {
   const scope = providerScopeKey(ownerScopedKey || ownerSource || profileScope(ownerProfile), sessionId)
-  const [state, setState] = useState(() => ({
-    scope,
-    provider: rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider)
-  }))
+  const seeded = rememberedSessionProvider(sessionId) || (!sessionId ? rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider) : '')
+  const [state, setState] = useState(() => ({ scope, provider: seeded }))
 
   useEffect(() => {
     let alive = true
-    // Seed from the OWNING account's remembered provider; `initialProvider` is
-    // only an open-time hint and must never override real per-source memory.
-    const seed = rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider)
+    // A known chat keeps its own provider across focus changes. Never seed it
+    // from another chat's last account, and never from the config default.
+    const seed = rememberedSessionProvider(sessionId) || (!sessionId ? rememberedProvider(ownerScopedKey) || normaliseProvider(initialProvider) : '')
     setState({ scope, provider: seed })
 
     const accept = payload => {
+      const reported = payload?.session_id || payload?.info?.session_id
+      if (sessionId && reported && reported !== sessionId) return
       const value = providerFromPayload(payload)
-      if (value && alive) {
-        const resolved = rememberProvider(ownerScopedKey, value)
-        if (resolved) setState({ scope, provider: resolved })
-      }
+      if (!value || !alive) return
+      if (sessionId) rememberSessionProvider(sessionId, value)
+      else rememberProvider(ownerScopedKey, value)
+      setState({ scope, provider: value })
     }
 
     const dispose = host.onEvent('session.info', event => {
-      // Exact identity + current ownership: a late event for a foreign session,
-      // or an anonymous event, must not contaminate this account's memory.
       if (!eventOwns(event, sessionId, ownerSource, ownerProfile)) return
       accept(event?.payload || {})
     })
 
     if (sessionId) {
+      // session.status prints "Model: name" with no provider. session.info is
+      // the call that actually returns one, so a chat switch doesn't wait on
+      // the next random event.
       void host
-        .request('session.status', { session_id: sessionId })
+        .request('session.info', { session_id: sessionId })
         .then(response => {
-          const payload = payloadFromResponse(response)
-          accept(payload?.info || payload)
+          if (!alive) return
+          accept(payloadFromResponse(response))
         })
         .catch(() => {})
     }
@@ -260,19 +269,32 @@ function useActiveProvider(sessionId, initialProvider = '', ownerProfile = '', o
     }
   }, [sessionId, ownerProfile, ownerSource, ownerScopedKey, scope, initialProvider])
 
-  return state.scope === scope ? state.provider : ''
+  if (state.scope === scope) return state.provider
+  return rememberedSessionProvider(sessionId)
 }
+
+// Set by the two manual refresh controls: the next overview fetch also asks
+// the backend to re-check the published vendor pages (peak schedules and rate
+// tables). The 60 s auto-poll and interval refetches never set it, so routine
+// traffic never hits vendor pages.
+let requestSourcesRefresh = false
 
 function useOverview(ctx, provider, model, fetchProfile, gateway, source) {
   return useQuery({
-    queryKey: providerUsageQueryKey(fetchProfile, provider, model, source),
-    queryFn: () =>
-      ctx.rest('/overview', {
-        method: 'POST',
-        body: { active_provider: provider || null, active_model: model || null },
-        timeoutMs: 25_000
-      }),
-    enabled: gatewayReady(gateway),
+    queryKey: providerUsageQueryKey(fetchProfile, source),
+    queryFn: () => {
+      const body = {
+        active_provider: provider || null,
+        active_model: model || null,
+        profile: fetchProfile || null
+      }
+      if (requestSourcesRefresh) {
+        body.refresh_sources = true
+        requestSourcesRefresh = false
+      }
+      return ctx.rest('/overview', { method: 'POST', body, timeoutMs: 25_000 })
+    },
+    enabled: gatewayReady(gateway) && Boolean(fetchProfile),
     staleTime: 15_000,
     refetchInterval: REFRESH_MS,
     retry: 1
@@ -322,7 +344,19 @@ function providerRow(data, provider) {
 }
 
 function activeRow(data, provider) {
-  return providerRow(data, provider) || providerRow(data, normaliseProvider(data?.active?.provider)) || null
+  // Never fall back to the response's active provider. An empty request makes
+  // the backend fill that with the config default (often Codex), which is how
+  // a Grok chat's popup opened on the wrong account.
+  if (!provider) return null
+  return providerRow(data, provider)
+}
+
+function accountMatches(data, fetchProfile, activeProfile) {
+  const reported = String(data?.account_profile || '').trim()
+  if (reported) return profileScope(reported) === profileScope(fetchProfile)
+  // An untagged response is the active socket's accounts. Don't present those
+  // as another bot's until the backend confirms which profile it read.
+  return profileScope(fetchProfile) === profileScope(activeProfile)
 }
 
 function mergeOpenCodeRows(rows, activeProvider = '') {
@@ -358,6 +392,42 @@ function mergeOpenCodeRows(rows, activeProvider = '') {
 function round(value) {
   const number = Number(value)
   return Number.isFinite(number) ? Math.round(number) : null
+}
+
+// "in 3h 12m" — the glanceable form of a reset time (absolute shown beside it).
+function formatCountdown(value) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const ms = date.getTime() - Date.now()
+  if (ms > -45_000 && ms <= 45_000) return 'now'
+  if (ms < 0) return null
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const restMin = minutes % 60
+  if (hours < 24) return restMin ? `${hours}h ${restMin}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  const restHrs = hours % 24
+  return restHrs ? `${days}d ${restHrs}h` : `${days}d`
+}
+
+// "Tue 3:00 PM", widening to include the day once the date leaves this week.
+function formatWhen(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const withinAWeek = date.getTime() - Date.now() < 6.5 * 24 * 3600 * 1000
+  return date.toLocaleString([], withinAWeek
+    ? { weekday: 'short', hour: 'numeric', minute: '2-digit' }
+    : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+// USD-per-1M-token amounts: two decimals, three below a cent so cheap models
+// never render as $0.00.
+function rateAmount(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return null
+  return `$${number >= 0.01 ? number.toFixed(2) : number.toFixed(3)}`
 }
 
 function money(balance) {
@@ -469,9 +539,44 @@ function fundingState(row, model) {
   return { kind: row?.available ? 'details' : 'unavailable', limit: null, windows: [], balance: null, exhausted: false, fallback: false }
 }
 
+function dollarWindow(row) {
+  const limits = Array.isArray(row?.limits) ? row.limits : []
+  for (const limit of limits) {
+    const windows = Array.isArray(limit?.windows) ? limit.windows : []
+    const found = windows.find(window => Number.isFinite(Number(window?.spent_usd)) && Number.isFinite(Number(window?.remaining_usd)))
+    if (found) return found
+  }
+  return null
+}
+
+function dollarWindowSummary(window) {
+  if (!window) return null
+  const spent = Number(window.spent_usd)
+  const left = Number(window.remaining_usd)
+  if (!Number.isFinite(spent) || !Number.isFinite(left)) return null
+  const allowance = Number(window.allowance_usd)
+  const cap = Number.isFinite(allowance) ? ` of $${allowance.toFixed(allowance === Math.round(allowance) ? 0 : 2)}` : ''
+  return `$${spent.toFixed(2)} spent · $${left.toFixed(2)}${cap} left`
+}
+
+function rowHasFunding(row) {
+  if (row?.available) return true
+  if (Array.isArray(row?.balances) && row.balances.length > 0) return true
+  if (Array.isArray(row?.limits) && row.limits.some(limit => Array.isArray(limit?.windows) && limit.windows.length > 0)) return true
+  if (row?.key_usage && typeof row.key_usage === 'object') return true
+  if (row?.activity && typeof row.activity === 'object') return true
+  return false
+}
+
 function compactFundingSummary(row, model) {
+  const dollars = dollarWindowSummary(dollarWindow(row))
+  if (dollars) return dollars
   const state = fundingState(row, model)
-  if (state.kind === 'balance') return state.fallback ? `${money(state.balance)} extra` : money(state.balance)
+  // A healthy free-model meter must not hide the credit balance. That is how
+  // OpenRouter's remaining credits disappeared behind "limited data".
+  if (state.balance && (row?.id === 'openrouter' || state.kind === 'balance')) {
+    return state.fallback ? `${money(state.balance)} extra` : money(state.balance)
+  }
   if (state.kind === 'subscription') {
     if (state.windows.length === 1) {
       const window = state.windows[0]
@@ -484,6 +589,7 @@ function compactFundingSummary(row, model) {
       .join(' · ')
   }
   if (row?.id === 'opencode-zen') return 'Zen balance unavailable'
+  if (state.balance) return money(state.balance)
   if (row?.available && row?.details?.[0]) return String(row.details[0]).slice(0, 24)
   return row?.available ? 'available' : 'limited data'
 }
@@ -515,28 +621,28 @@ function statusFundingSummary(row, model) {
 function chipDescription(row, model, data, switching, ready, refetchError, scope, backendGone) {
   if (switching) return `Switching profile — ${scope.fetchProfile} usage will refresh when the new profile is ready.`
   const updated = data?.fetched_at ? new Date(data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet'
-  const stateNote = scope?.diverged
-    ? ` Shows ${scope.fetchProfile} profile usage; the focused chat is in ${scope.focusProfile}.`
+  const accountNote = scope?.fetchProfile && scope.fetchProfile !== scope.activeProfile
+    ? ` Accounts on ${scope.fetchProfile}.`
     : ''
   if (backendGone) {
     // The active profile's socket has no provider-usage backend installed (its
     // /overview 404s). Surfacing just "unavailable" would hide the cause; the
     // toolbar must say the backend isn't there and never auto-install it.
-    return `Provider usage isn't enabled or installed in ${scope.fetchProfile}. Enable or install this plugin in that profile to see usage; Hermes never edits profiles automatically.${stateNote}`
+    return `Provider usage isn't enabled on the active profile (${scope.activeProfile || scope.fetchProfile}), so this machine can't read the accounts. Enable the plugin there; Hermes never edits profiles automatically.`
   }
   if (!ready) {
     return row
-      ? `Provider usage for ${scope.fetchProfile} is from ${updated}; reconnecting.${stateNote}`
-      : `Provider usage for ${scope.fetchProfile}. Reconnecting.${stateNote}`
+      ? `Provider usage for ${scope.fetchProfile} is from ${updated}; reconnecting.${accountNote}`
+      : `Provider usage for ${scope.fetchProfile}. Reconnecting.${accountNote}`
   }
   if (refetchError) {
     return row
-      ? `Provider usage for ${scope.fetchProfile} could not be refreshed — showing ${updated}.${stateNote}`
-      : `Provider usage for ${scope.fetchProfile}. Could not refresh.${stateNote}`
+      ? `Provider usage for ${scope.fetchProfile} could not be refreshed — showing ${updated}.${accountNote}`
+      : `Provider usage for ${scope.fetchProfile}. Could not refresh.${accountNote}`
   }
-  if (!row) return `Provider usage for ${scope.fetchProfile}. Last updated ${updated}.${stateNote}`
+  if (!row) return `Provider usage for ${scope.fetchProfile}. Last updated ${updated}.${accountNote}`
   const modelName = model ? ` Active model ${model}.` : ''
-  return `${row.label}: ${statusFundingSummary(row, model)}.${modelName}${stateNote} Open the Provider Usage pane for every reported window. Updated ${updated}.`
+  return `${row.label}: ${statusFundingSummary(row, model)}.${modelName}${accountNote} Open the Provider Usage pane for every reported window. Updated ${updated}.`
 }
 
 function formatReset(value) {
@@ -562,8 +668,15 @@ function formatUpdated(value) {
 function windowMeta(window) {
   const resetAt = window?.reset_at || window?.resets_at || window?.renewal_at || null
   const detail = typeof window?.detail === 'string' && window.detail.trim() ? window.detail.trim() : null
-  const parts = [resetAt ? formatReset(resetAt) : null, detail].filter(Boolean)
-  return parts.length > 0 ? parts.join(' • ') : 'Reset time unavailable'
+  const countdown = resetAt ? formatCountdown(resetAt) : null
+  const when = resetAt ? formatWhen(resetAt) : null
+  const resetPart = resetAt
+    ? countdown
+      ? `Resets in ${countdown} · ${when}`
+      : `Resets ${when}`
+    : 'Reset time unavailable'
+  const parts = [resetPart, detail].filter(Boolean)
+  return parts.join(' • ')
 }
 
 function progressWidth(window) {
@@ -582,15 +695,15 @@ function UsageMeter({ window, compact = false }) {
       ? 'var(--ui-orange)'
       : 'var(--ui-accent)'
   return jsxs('div', {
-    style: { display: 'grid', gap: compact ? 5 : 7, padding: compact ? '7px 0' : '9px 0' },
+    style: { display: 'grid', gap: compact ? 6 : 7, padding: compact ? '7px 0' : '9px 0' },
     children: [
       jsxs('div', {
         style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
         children: [
-          jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 500 }, children: cleanWindowLabel(window) }),
+          jsx('span', { style: { ...textSecondary, fontSize: compact ? 11 : 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: cleanWindowLabel(window) }),
           jsx('strong', {
-            style: { ...textPrimary, color: exhausted || low ? meterTone : textPrimary.color, fontSize: compact ? 11 : 12, fontVariantNumeric: 'tabular-nums' },
-            children: remaining == null ? 'Unavailable' : `${remaining}% left`
+            style: { ...textPrimary, color: exhausted || low ? meterTone : textPrimary.color, fontSize: compact ? 11.5 : 12.5, fontWeight: 650, fontVariantNumeric: 'tabular-nums' },
+            children: dollarWindowSummary(window) || (remaining == null ? 'Unavailable' : `${remaining}% left`)
           })
         ]
       }),
@@ -600,18 +713,18 @@ function UsageMeter({ window, compact = false }) {
         'aria-valuemin': 0,
         'aria-valuemax': 100,
         'aria-valuenow': remaining == null ? undefined : remaining,
-        style: { height: 4, borderRadius: 2, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
+        style: { height: compact ? 5 : 6, borderRadius: 999, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
         children: jsx('div', {
           style: {
             width: progressWidth(window),
             height: '100%',
-            borderRadius: 2,
+            borderRadius: 999,
             background: meterTone,
             transition: 'width 180ms ease-out'
           }
         })
       }),
-      jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.4 }, children: windowMeta(window) })
+      jsx('span', { style: { ...textTertiary, fontSize: 10.5, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: dollarWindowSummary(window) ? (window?.reset_at ? formatReset(window.reset_at) : 'Resets with the plan') : windowMeta(window) })
     ]
   })
 }
@@ -621,6 +734,9 @@ function BalanceMetric({ balance, prominent = false, subdued = false }) {
   const used = Number(balance?.used)
   const granted = Number(balance?.granted)
   const toppedUp = Number(balance?.topped_up)
+  const usedRatio = Number.isFinite(total) && total > 0 && Number.isFinite(used)
+    ? Math.max(0, Math.min(1, used / total))
+    : null
   const details = [
     Number.isFinite(total) && Number.isFinite(used)
       ? `${money({ amount: used, currency: balance?.currency })} used of ${money({ amount: total, currency: balance?.currency })}`
@@ -634,15 +750,26 @@ function BalanceMetric({ balance, prominent = false, subdued = false }) {
     balance?.expires_at ? `Expires ${new Date(balance.expires_at).toLocaleString()}` : null
   ].filter(Boolean)
   return jsxs('div', {
-    style: { display: 'grid', gap: 2, padding: prominent ? '3px 0' : '7px 0' },
+    style: { display: 'grid', gap: 2, padding: prominent ? '1px 0' : '7px 0' },
     children: [
       jsx('span', { style: { ...(subdued ? textQuaternary : textTertiary), fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: balance?.label || 'Balance' }),
       jsx('strong', {
-        style: { ...(subdued ? textTertiary : textPrimary), fontSize: prominent ? 26 : subdued ? 11 : 14, fontWeight: subdued ? 500 : 650, lineHeight: 1.25, fontVariantNumeric: 'tabular-nums' },
+        style: { ...(subdued ? textTertiary : textPrimary), fontSize: prominent ? 27 : subdued ? 12 : 20, fontWeight: subdued ? 550 : 650, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' },
         children: money(balance)
       }),
+      usedRatio != null
+        ? jsx('div', {
+            role: 'progressbar',
+            'aria-label': `${balance?.label || 'Balance'} used`,
+            'aria-valuemin': 0,
+            'aria-valuemax': 100,
+            'aria-valuenow': Math.round(usedRatio * 100),
+            style: { height: 4, borderRadius: 999, overflow: 'hidden', background: 'var(--ui-bg-quaternary)', margin: '5px 0 3px' },
+            children: jsx('div', { style: { width: `${Math.round(usedRatio * 100)}%`, height: '100%', borderRadius: 999, background: 'var(--ui-accent)' } })
+          })
+        : null,
       details.length > 0
-        ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: details.join(' • ') })
+        ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.5 }, children: details.join(' · ') })
         : null
     ]
   })
@@ -654,7 +781,10 @@ function cleanDetails(row) {
   return (Array.isArray(row?.details) ? row.details : []).filter(detail => {
     const text = String(detail || '')
     if (hasLimits && (/^\d+% remaining$/i.test(text) || /^resets:/i.test(text))) return false
-    if (hasBalances && /^(?:[A-Z]{3} )?balance:|^credits (?:remaining|balance):/i.test(text)) return false
+    if (hasBalances && (/^(?:[A-Z]{3} )?balance:|^credits (?:remaining|balance):/i.test(text) || /granted|topped up/i.test(text))) return false
+    if (/^account available: yes$/i.test(text)) return false
+    if (Array.isArray(row?.breakdown) && row.breakdown.length > 0 && /^one shared pool/i.test(text)) return false
+    if (row?.activity && (/^\$[\d,.]+ · .+ requests$/i.test(text) || /^tokens in the last /i.test(text))) return false
     return true
   })
 }
@@ -668,6 +798,18 @@ function SectionLabel({ children, aside = null }) {
         children
       }),
       aside ? jsx('span', { style: { ...textQuaternary, fontSize: 9 }, children: aside }) : null
+    ]
+  })
+}
+
+// Sentence-case section title for the reading sections (the settings-style
+// uppercase SectionLabel stays for small captions).
+function SectionTitle({ children, aside = null }) {
+  return jsxs('div', {
+    style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+    children: [
+      jsx('h3', { style: { ...textPrimary, margin: 0, fontSize: 12, lineHeight: 1.35, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children }),
+      aside ? jsx('span', { style: { ...textQuaternary, fontSize: 10 }, children: aside }) : null
     ]
   })
 }
@@ -703,29 +845,302 @@ function LimitGroup({ rowId, limit, grouped = false }) {
   })
 }
 
-function PricingAndDemand({ row, always = false }) {
-  const pricing = Array.isArray(row?.pricing) ? row.pricing : []
-  const demand = Array.isArray(row?.demand) ? row.demand : []
-  const entries = [...pricing, ...demand]
-  if (!always && entries.length === 0) return null
+function rateSummary(entry) {
+  const parts = [
+    [rateAmount(entry?.input), 'in'],
+    [rateAmount(entry?.output), 'out'],
+    [rateAmount(entry?.cache_read), 'cache-read'],
+    [rateAmount(entry?.cache_write), 'cache-write']
+  ].filter(([amount]) => Boolean(amount)).map(([amount, label]) => `${amount} ${label}`)
+  return parts.join(' · ')
+}
+
+function formatCheckStamp(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return date.toDateString() === new Date().toDateString()
+    ? `today ${time}`
+    : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+
+function rateSourceLine(pricing) {
+  const versions = [...new Set(pricing.map(entry => entry?.pricing_version).filter(Boolean))]
+  const hosts = [...new Set(pricing.map(entry => {
+    if (!entry?.source_url) return null
+    try {
+      return new URL(entry.source_url).hostname
+    } catch {
+      return null
+    }
+  }).filter(Boolean))]
+  const checked = [...new Set(pricing.map(entry => entry?.checked_at).filter(Boolean))].sort().pop() || null
+  const parts = []
+  if (versions.length > 0) parts.push(versions.join(' · '))
+  if (hosts.length > 0) parts.push(...hosts)
+  if (checked) {
+    const stamp = formatCheckStamp(checked)
+    if (stamp) parts.push(`page-checked ${stamp}`)
+  }
+  return parts.length > 0 ? `Rate card: ${parts.join(' · ')}` : null
+}
+
+function PeakNote({ peak, separated = false }) {
+  if (!peak || typeof peak !== 'object') return null
+  const isPeak = peak.mode === 'peak'
+  const multiplier = Number.isFinite(Number(peak.multiplier)) ? ` · ${round(Number(peak.multiplier))}×` : ''
+  const countdown = peak.next_change_at ? formatCountdown(peak.next_change_at) : null
+  const when = peak.next_change_at ? formatWhen(peak.next_change_at) : null
+  const hint = countdown ? `peak ${isPeak ? 'ends' : 'starts'} in ${countdown}${when ? ` · ${when}` : ''}` : null
   return jsxs('div', {
-    style: { display: 'grid', gap: 5, paddingTop: 10, borderTop: HAIRLINE },
+    style: { display: 'grid', gap: 5, paddingTop: separated ? 9 : 0, borderTop: separated ? HAIRLINE : 'none' },
     children: [
-      jsx(SectionLabel, { children: 'Pricing & demand' }),
-      entries.length > 0
-        ? entries.map((entry, index) =>
-            jsxs('div', {
-              style: { display: 'flex', justifyContent: 'space-between', gap: 12, ...textQuaternary, fontSize: 10, lineHeight: 1.45 },
-              children: [
-                jsx('span', { children: entry?.label || 'Rate' }),
-                jsx('span', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, children: entry?.value || entry?.detail || 'Unavailable' })
-              ]
-            }, `pricing-${index}`)
-          )
-        : jsx('span', {
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+        children: [
+          jsx(Badge, { variant: isPeak ? 'warn' : 'success', size: 'xs', children: isPeak ? `Peak now${multiplier}` : 'Off-peak now' }, 'badge'),
+          hint ? jsx('span', { style: { ...textTertiary, fontSize: 10.5, fontVariantNumeric: 'tabular-nums' }, children: hint }, 'hint') : null
+        ]
+      }),
+      peak.schedule_local || peak.schedule
+        ? jsx('span', {
             style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 },
-            children: 'This provider does not expose token pricing, dynamic rates, or peak-demand data through its account endpoint.'
-          })
+            title: peak.schedule_local
+              ? [
+                  `Published schedule (UTC): ${peak.schedule}`,
+                  peak.schedule_fetched_at
+                    ? `Auto-checked ${new Date(peak.schedule_fetched_at).toLocaleString()}`
+                    : 'Bundled copy — auto-check pending'
+                ].join('\n')
+              : undefined,
+            children: peak.schedule_local || peak.schedule
+          }, 'schedule')
+        : null
+    ]
+  })
+}
+
+function RatesPanel({ row, always = false, compact = false }) {
+  const pricing = Array.isArray(row?.pricing) ? row.pricing : []
+  const peak = row?.peak && typeof row.peak === 'object' ? row.peak : null
+  if (!always && pricing.length === 0 && !peak) return null
+  const source = pricing.length > 0 ? rateSourceLine(pricing) : null
+  return jsxs('div', {
+    style: { display: 'grid', gap: compact ? 8 : 9, paddingTop: compact ? 11 : 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, { aside: pricing.length > 0 ? 'per 1M tokens' : null, children: compact ? 'Rates' : 'Rates & peak pricing' }, 'title'),
+      pricing.length > 0
+        ? jsx('div', {
+            style: { display: 'grid', gap: compact ? 6 : 7 },
+            children: pricing.map((entry, index) => jsxs('div', {
+              style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+              children: [
+                jsxs('span', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }, children: [
+                  jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry?.model || 'Model' }, 'model'),
+                  entry?.active ? jsx(Badge, { variant: 'outline', size: 'xs', children: 'current' }, 'current') : null
+                ] }, 'name'),
+                jsx('span', { style: { ...textPrimary, fontSize: 11, fontWeight: 550, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: rateSummary(entry) || '—' }, 'rates')
+              ]
+            }, `rate-${index}`))
+          }, 'rows')
+        : jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: 'No published token-rate card is available for this provider yet.' }, 'empty'),
+      source ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, lineHeight: 1.45 }, children: source }, 'source') : null,
+      pricing.some(entry => entry?.changed_from_card)
+        ? jsx('span', {
+            style: { color: 'var(--ui-orange)', fontSize: 9.5, lineHeight: 1.45, fontWeight: 550 },
+            children: "Refreshed from the vendor page — Hermes' own cost tracker still uses its bundled card until core updates."
+          }, 'diverged')
+        : null,
+      jsx(PeakNote, { peak }, 'peak')
+    ]
+  })
+}
+
+function legacyPlanNote(plan) {
+  if (!/supergrok/i.test(String(plan || ''))) return null
+  return 'API still uses this SuperGrok name. X Ultra replaces it; Cursor shows up in the split when the API starts sending it.'
+}
+
+function BreakdownPanel({ row, compact = false }) {
+  const rows = Array.isArray(row?.breakdown)
+    ? row.breakdown.filter(item => Number.isFinite(Number(item?.used_percent)))
+    : []
+  if (rows.length === 0) return null
+  return jsxs('div', {
+    style: { display: 'grid', gap: compact ? 6 : 7, paddingTop: compact ? 11 : 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, { aside: 'one pool', children: compact ? 'Breakdown' : 'Usage breakdown' }, 'title'),
+      jsx('div', {
+        style: { display: 'grid', gap: compact ? 5 : 6 },
+        children: rows.map(item => {
+          const used = Math.max(0, Math.min(100, Number(item.used_percent)))
+          return jsxs('div', {
+            style: { display: 'grid', gap: 3 },
+            children: [
+              jsxs('div', {
+                style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+                children: [
+                  jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 550 }, title: item.id ? `API product: ${item.id}` : undefined, children: item.label || 'Product' }, 'label'),
+                  jsx('span', { style: { ...textPrimary, fontSize: 11, fontVariantNumeric: 'tabular-nums' }, children: `${round(used)}%` }, 'pct')
+                ]
+              }, 'row'),
+              jsx('div', {
+                role: 'progressbar',
+                'aria-label': `${item.label || 'Product'} share of the pool`,
+                'aria-valuemin': 0,
+                'aria-valuemax': 100,
+                'aria-valuenow': Math.round(used),
+                style: { height: 4, borderRadius: 999, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
+                children: jsx('div', { style: { width: `${used > 0 ? Math.max(2, used) : 0}%`, height: '100%', borderRadius: 999, background: 'var(--ui-accent)' } })
+              }, 'bar')
+            ]
+          }, item.id || item.label)
+        })
+      }, 'rows'),
+      row.breakdown_note
+        ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: row.breakdown_note }, 'note')
+        : null
+    ]
+  })
+}
+
+function formatTokens(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return null
+  if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(1)}B`
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`
+  if (number >= 1_000) return `${(number / 1_000).toFixed(0)}K`
+  return `${Math.round(number)}`
+}
+
+function CachePanel({ cache, compact = false }) {
+  if (!cache || typeof cache !== 'object') return null
+  const hitRate = Number(cache.hit_rate)
+  const read = Number(cache.cache_read_tokens)
+  const prompt = Number(cache.prompt_tokens)
+  if (!Number.isFinite(hitRate) || !Number.isFinite(read) || read <= 0 || !Number.isFinite(prompt) || prompt <= 0) return null
+  const pct = Math.round(hitRate * 1000) / 10
+  const saved = Number(cache.saved_usd)
+  const meta = [
+    `${formatTokens(read)} of ${formatTokens(prompt)} prompt tokens served from cache`,
+    Number(cache.cache_write_tokens) > 0 ? `${formatTokens(cache.cache_write_tokens)} written to cache` : null
+  ].filter(Boolean).join(' · ')
+  return jsxs('div', {
+    style: { display: 'grid', gap: compact ? 7 : 8, paddingTop: compact ? 11 : 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, { aside: `last ${Number(cache.days) || 7} days`, children: compact ? 'Cache' : 'Prompt cache' }, 'title'),
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+        children: [
+          jsx('strong', { style: { ...textPrimary, fontSize: compact ? 14 : 15, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }, children: `${pct}% hit rate` }, 'rate'),
+          Number.isFinite(saved) && saved > 0
+            ? jsx('span', {
+                style: { ...textSecondary, fontSize: 11, fontVariantNumeric: 'tabular-nums' },
+                children: `est. saved ${money({ amount: saved, currency: 'USD' })}${cache.saved_partial ? '+' : ''}`
+              }, 'saved')
+            : null
+        ]
+      }),
+      jsx('div', {
+        role: 'progressbar',
+        'aria-label': 'prompt cache hit rate',
+        'aria-valuemin': 0,
+        'aria-valuemax': 100,
+        'aria-valuenow': Math.round(hitRate * 100),
+        style: { height: compact ? 4 : 5, borderRadius: 999, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
+        children: jsx('div', { style: { width: `${Math.max(2, Math.round(hitRate * 100))}%`, height: '100%', borderRadius: 999, background: 'var(--ui-accent)' } })
+      }, 'bar'),
+      jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: meta }, 'meta')
+    ]
+  })
+}
+
+function ActivityPanel({ activity, compact = false }) {
+  if (!activity || typeof activity !== 'object') return null
+  const requests = Number(activity.requests)
+  const usd = Number(activity.usd)
+  const buckets = Array.isArray(activity.buckets) ? activity.buckets.filter(entry => entry && typeof entry === 'object') : []
+  if ((!Number.isFinite(requests) || requests <= 0) && (!Number.isFinite(usd) || usd <= 0) && buckets.length === 0) return null
+  const peak = Math.max(0, ...buckets.map(entry => Number(entry.usd) || 0))
+  const headline = [
+    Number.isFinite(usd) ? money({ amount: usd, currency: 'USD' }) : null,
+    Number.isFinite(requests) ? `${requests.toLocaleString()} requests` : null
+  ].filter(Boolean).join(' · ')
+  const tokens = [
+    Number.isFinite(Number(activity.input_tokens)) ? `${formatTokens(activity.input_tokens)} in` : null,
+    Number.isFinite(Number(activity.output_tokens)) ? `${formatTokens(activity.output_tokens)} out` : null,
+    Number.isFinite(Number(activity.cached_tokens))
+      ? `${formatTokens(activity.cached_tokens)} cached${Number.isFinite(Number(activity.hit_rate)) ? ` (${Math.round(Number(activity.hit_rate) * 100)}%)` : ''}`
+      : null
+  ].filter(Boolean).join(' · ')
+  return jsxs('div', {
+    style: { display: 'grid', gap: compact ? 7 : 8, paddingTop: compact ? 11 : 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, { aside: `last ${activity.range || '7d'}`, children: 'Activity' }, 'title'),
+      headline
+        ? jsx('strong', { style: { ...textPrimary, fontSize: compact ? 14 : 15, fontWeight: 650, fontVariantNumeric: 'tabular-nums' }, children: headline }, 'headline')
+        : null,
+      buckets.length > 0
+        ? jsx('div', {
+            style: { display: 'flex', alignItems: 'flex-end', gap: 3, height: compact ? 22 : 28 },
+            children: buckets.map((entry, index) => {
+              const value = Number(entry.usd) || 0
+              const ratio = peak > 0 ? value / peak : 0
+              const when = entry.from ? new Date(entry.from).toLocaleDateString([], { month: 'short', day: 'numeric' }) : null
+              const count = Number(entry.requests)
+              const tip = [
+                when,
+                value > 0 ? money({ amount: value, currency: 'USD' }) : 'no usage',
+                Number.isFinite(count) && count > 0 ? `${count.toLocaleString()} requests` : null
+              ].filter(Boolean).join(' · ')
+              return jsx('div', {
+                title: tip,
+                style: {
+                  flex: 1,
+                  minHeight: 2,
+                  height: value > 0 ? `${Math.max(8, Math.round(ratio * 100))}%` : 3,
+                  borderRadius: 3,
+                  background: value > 0 ? 'var(--ui-accent)' : 'var(--ui-bg-quaternary)',
+                  opacity: index === buckets.length - 1 ? 1 : 0.65
+                }
+              }, `activity-${index}`)
+            })
+          }, 'spark')
+        : null,
+      tokens ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' }, children: tokens }, 'meta') : null
+    ]
+  })
+}
+
+function KeyUsagePanel({ keyUsage, compact = false }) {
+  if (!keyUsage || typeof keyUsage !== 'object') return null
+  const total = Number(keyUsage.total)
+  const rows = [
+    { label: 'Today', amount: Number(keyUsage.daily) },
+    { label: 'This week', amount: Number(keyUsage.weekly) },
+    { label: 'This month', amount: Number(keyUsage.monthly) },
+    { label: 'BYOK', amount: Number(keyUsage.byok_total) }
+  ].filter(row => Number.isFinite(row.amount) && (row.label !== 'BYOK' || row.amount > 0))
+  if (!Number.isFinite(total) && rows.length === 0) return null
+  return jsxs('div', {
+    style: { display: 'grid', gap: compact ? 7 : 8, paddingTop: compact ? 11 : 10, borderTop: HAIRLINE },
+    children: [
+      jsx(SectionTitle, {
+        aside: Number.isFinite(total) ? `${money({ amount: total, currency: 'USD' })} on this key` : null,
+        children: compact ? 'Key usage' : 'API key usage'
+      }, 'title'),
+      rows.length > 0
+        ? jsx('div', {
+            style: { display: 'grid', gap: 5 },
+            children: rows.map(row => jsxs('div', {
+              style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+              children: [
+                jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 550 }, children: row.label }, 'label'),
+                jsx('span', { style: { ...textPrimary, fontSize: 11, fontVariantNumeric: 'tabular-nums' }, children: money({ amount: row.amount, currency: 'USD' }) }, 'amount')
+              ]
+            }, `key-${row.label}`))
+          }, 'rows')
+        : null
     ]
   })
 }
@@ -770,7 +1185,6 @@ function ModelAccess({ row }) {
 function ProviderNotes({ row, complete = false }) {
   const details = cleanDetails(row)
   const renewalAt = row?.renewal_at || row?.subscription?.renewal_at || null
-  const resetCredits = row?.reset_credits
   const creditStatus = row?.credit_status
   const spendControl = row?.spend_control
   const localMessages = messageRange(creditStatus?.approx_local_messages)
@@ -779,9 +1193,6 @@ function ProviderNotes({ row, complete = false }) {
     renewalAt
       ? `Subscription renews ${new Date(renewalAt).toLocaleString()}`
       : complete && row?.plan ? 'Subscription renewal date is not exposed by this provider.' : null,
-    resetCredits
-      ? `Banked resets: ${resetCredits.available ?? 0} total (${resetCredits.applicable ?? 0} applicable now)`
-      : null,
     creditStatus?.unlimited
       ? 'Extra usage is unlimited.'
       : creditStatus
@@ -841,7 +1252,10 @@ function AllProviderMetrics({ row, complete = false }) {
         ),
         jsx(ModelAccess, { row }),
         jsx(ProviderNotes, { row, complete }),
-        jsx(PricingAndDemand, { row, always: complete })
+        jsx(KeyUsagePanel, { keyUsage: row?.key_usage }),
+        jsx(ActivityPanel, { activity: row?.activity }),
+        jsx(CachePanel, { cache: row?.cache }),
+        jsx(RatesPanel, { row })
       ]
     })
   }
@@ -850,6 +1264,13 @@ function AllProviderMetrics({ row, complete = false }) {
     children: [
       limits.length > 0 ? jsx(SectionLabel, { aside: `${limits.length} ${limits.length === 1 ? 'limit group' : 'limit groups'}`, children: 'Limits' }) : null,
       limits.map((limit, index) => jsx(LimitGroup, { rowId: row.id, limit, grouped: index > 0 }, `${row.id}-${limit.id}`)),
+      jsx(BreakdownPanel, { row }),
+      row?.reset_credits
+        ? jsx('span', {
+            style: { ...textTertiary, fontSize: 11, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' },
+            children: `Banked resets: ${row.reset_credits.available ?? 0} saved, ${row.reset_credits.applicable ?? 0} usable now`
+          })
+        : null,
       balances.length > 0
         ? jsxs('div', {
             style: { display: 'grid', gap: 4, paddingTop: limits.length > 0 ? 10 : 0, borderTop: limits.length > 0 ? HAIRLINE : 'none' },
@@ -864,7 +1285,10 @@ function AllProviderMetrics({ row, complete = false }) {
         : null,
       jsx(ModelAccess, { row }),
       jsx(ProviderNotes, { row, complete }),
-      jsx(PricingAndDemand, { row, always: complete })
+      jsx(KeyUsagePanel, { keyUsage: row?.key_usage }),
+      jsx(ActivityPanel, { activity: row?.activity }),
+      jsx(CachePanel, { cache: row?.cache }),
+      jsx(RatesPanel, { row })
     ]
   })
 }
@@ -923,7 +1347,10 @@ function ActiveProvider({ row, model }) {
         children: [
           jsx('span', { style: { ...textTertiary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.07em' }, children: 'Current request funding' }),
           jsx('strong', { style: { ...textPrimary, fontSize: codexFallback ? 16 : 18, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }, children: fundingHeadline }),
-          jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail })
+          jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail }),
+          row?.id === 'xai-oauth' && legacyPlanNote(row?.plan)
+            ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) })
+            : null
         ]
       }),
       jsxs('div', {
@@ -941,7 +1368,7 @@ function ProviderDisclosure({ row }) {
   const [open, setOpen] = useState(false)
   const summary = compactFundingSummary(row, '')
   return jsxs('div', {
-    style: { borderBottom: HAIRLINE },
+    style: { border: '1px solid var(--ui-stroke-tertiary)', borderRadius: 8, background: 'var(--ui-bg-card)', overflow: 'hidden' },
     children: [
       jsx(RowButton, {
         'aria-expanded': open,
@@ -956,7 +1383,7 @@ function ProviderDisclosure({ row }) {
           gridTemplateColumns: 'minmax(0, 1fr) auto auto',
           alignItems: 'center',
           gap: 10,
-          padding: '11px 0',
+          padding: '11px 13px',
           border: 0,
           background: 'transparent',
           color: 'inherit',
@@ -985,7 +1412,7 @@ function ProviderDisclosure({ row }) {
         })
       }),
       open
-        ? jsx('div', { style: { padding: '0 24px 13px 13px' }, children: jsx(AllProviderMetrics, { row }) })
+        ? jsx('div', { style: { padding: '0 13px 13px' }, children: jsx(AllProviderMetrics, { row }) })
         : null
     ]
   })
@@ -1037,14 +1464,11 @@ function LimitedProviders({ rows }) {
   })
 }
 
-function openOverview(ctx, fetchProfile, initialProvider, sourceId) {
-  // Scope the open-time provider hint to the source the page will actually
-  // query (the active account), so it never leaks across a switch.
-  const memoKey = sourceId || profileScope(fetchProfile)
-  if (initialProvider) rememberProvider(memoKey, initialProvider)
+function openOverview(ctx) {
   // Full workspace page (Settings-style): every provider, all windows, resets,
   // balances, and metadata. Feature-detect navigate; older builds fall back to
-  // a docked workspace tab.
+  // a docked workspace tab. Do not stamp the chat's provider onto the profile
+  // — that is what made the next chat open on the previous account.
   if (typeof host.navigate === 'function') {
     host.navigate(OVERVIEW_ROUTE)
     return
@@ -1071,15 +1495,18 @@ function ActiveUsageChip({ ctx }) {
   const gateway = useValue(host.state.gateway)
   const scope = resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile })
 
-  // Divergence fails closed: never fetch or probe for a foreign account.
-  if (scope.diverged) {
-    return jsx(GatedUsageChip, { focusProfile: scope.focusProfile })
+  // Another machine only. A local bot's profile is fetched, not gated.
+  if (scope.unreachable) {
+    return jsx(GatedUsageChip, { scope })
   }
   return jsx(ActiveUsageChipBody, { ctx, model, sessionId, gateway, scope })
 }
 
-function GatedUsageChip({ focusProfile }) {
-  const description = `The focused chat is in ${focusProfile}. Switch the active profile to ${focusProfile} to view its provider usage.`
+function GatedUsageChip({ scope }) {
+  const focusProfile = scope.focusProfile
+  const description = scope.ambiguous
+    ? `The focused chat's account could not be identified (${focusProfile}). This gateway will not guess which account that chat uses.`
+    : `The focused chat is on another connection (${focusProfile}). This gateway can read profiles on this machine, not that one.`
   return jsx(Tip, {
     label: description,
     children: jsx(Button, {
@@ -1089,10 +1516,12 @@ function GatedUsageChip({ focusProfile }) {
       'aria-label': description,
       onClick: () => {
         haptic('tap')
-        host.notify({ kind: 'info', message: `Provider usage follows the active profile. Switch to ${focusProfile} to see its usage.` })
+        host.notify({ kind: 'info', message: scope.ambiguous
+          ? `That chat's account could not be identified, so usage is not shown rather than guessed.`
+          : `That chat is on another connection. Usage here can read this machine's profiles, not ${focusProfile} on that connection.` })
       },
       style: { maxWidth: 230 },
-      children: [jsx(icons.Activity, { 'aria-hidden': true }, 'icon'), jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `Usage on ${focusProfile}` }, 'label')]
+      children: [jsx(icons.Activity, { 'aria-hidden': true }, 'icon'), jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: 'Other connection' }, 'label')]
     })
   })
 }
@@ -1101,24 +1530,24 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   const ready = gatewayReady(gateway)
   const provider = useActiveProvider(sessionId, '', scope.fetchProfile, scope.ownerConnection, scope.sourceId)
   const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway, scope.sourceId)
-  const row = activeRow(query.data, provider)
+  const matched = accountMatches(query.data, scope.fetchProfile, scope.activeProfile) ? query.data : null
+  const row = activeRow(matched, provider)
   const state = fundingState(row, model)
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
-  // The active profile's socket 404s /overview AND we have no rows: the backend
-  // isn't enabled/installed for this profile. Make that explicit on the toolbar
-  // too (not just the pane) — the iconography stays a warning, never a guess.
   const backendGone = ready && Boolean(query.isError) && !row && isBackendNotEnabled(query.error)
   const refetchError = Boolean(query.isError) && Boolean(row)
   const label = row ? compactProviderLabel(row) : 'Usage'
 
   let summary = 'unavailable'
   if (switching) summary = 'switching'
-  else if (backendGone) summary = `not enabled in ${scope.fetchProfile}`
+  else if (backendGone) summary = 'plugin off'
+  else if (!provider && sessionId) summary = 'checking'
   else if (row) summary = statusFundingSummary(row, model)
-  else if (ready) summary = query.isLoading ? 'checking' : 'unavailable'
+  else if (ready && (query.isLoading || !matched)) summary = 'checking'
+  else if (ready) summary = 'unavailable'
   if (refetchError) summary = `${summary} · not refreshed`
 
-  const description = chipDescription(row, model, query.data, switching, ready, refetchError, scope, backendGone)
+  const description = chipDescription(row, model, matched, switching, ready, refetchError, scope, backendGone)
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
   // Controlled so "View all providers" dismisses the popover as the page opens.
   const [popoverOpen, setPopoverOpen] = useState(false)
@@ -1150,7 +1579,7 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
         side: 'top',
         sideOffset: 8,
         collisionPadding: 8,
-        style: { width: 340, maxHeight: 'min(84vh, 460px)', overflowY: 'auto', overflowX: 'hidden', padding: 0 },
+        style: { width: 356, maxHeight: 'min(84vh, 520px)', overflowY: 'auto', overflowX: 'hidden', padding: 0 },
         children: jsx(ChipUsagePopover, {
           ctx,
           model,
@@ -1178,7 +1607,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
     'aria-label': 'View all providers',
     onClick: () => {
       haptic('tap')
-      openOverview(ctx, scope.fetchProfile, provider, scope.sourceId)
+      openOverview(ctx)
       if (typeof onRequestClose === 'function') onRequestClose()
     },
     style: { width: '100%', justifyContent: 'center' },
@@ -1199,21 +1628,12 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
     })
   }
 
-  if (scope.diverged) {
-    return jsxs('div', {
-      style: { display: 'grid', gap: 12, padding: 16 },
-      children: [
-        jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: `The focused chat is in ${scope.focusProfile}. Usage here follows the active profile (${scope.fetchProfile}).` }),
-        viewAll
-      ]
-    })
-  }
-
   if (!row) {
+    const waiting = !provider || query.isLoading
     return jsxs('div', {
       style: { display: 'grid', gap: 12, padding: 16 },
       children: [
-        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: query.isLoading ? 'Checking provider accounts…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
+        jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: waiting ? 'Checking which account this chat is using…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
         viewAll
       ]
     })
@@ -1229,29 +1649,37 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
       'aria-label': 'Refresh provider usage',
       onClick: () => {
         haptic('tap')
+        requestSourcesRefresh = true
         void query.refetch()
       },
       children: jsx(icons.RefreshCw, { 'aria-hidden': true })
     })
   })
 
-  const isBalance = state.kind === 'balance'
-  const fundingHeadline = isBalance
-    ? (state.fallback ? `${money(state.balance)} extra` : money(state.balance))
-    : compactFundingSummary(row, model)
-  const fundingDetail = isBalance
-    ? 'Requests are billed from this provider balance.'
-    : state.kind === 'subscription'
-      ? `${row?.plan || 'Subscription'} allowance`
-      : row?.unavailable_reason || 'No usage data is exposed.'
-
-  const windows = (state.windows || []).filter(window => round(window?.remaining_percent) != null)
-  const meterTone = window => {
-    const remaining = round(window?.remaining_percent)
-    if (remaining != null && remaining <= 0) return 'var(--dt-destructive)'
-    if (remaining != null && remaining <= 15) return 'var(--ui-orange)'
-    return 'var(--ui-accent)'
-  }
+  // Every window of the selected limit (not just the governing one) — the
+  // popover has room to show the full picture the chip compresses.
+  const limitWindows = (() => {
+    const limit = selectLimit(row, model)
+    const fromLimit = Array.isArray(limit?.windows)
+      ? limit.windows.filter(window => round(window?.remaining_percent) != null)
+      : []
+    if (fromLimit.length > 0) return fromLimit
+    // Several limit groups but no default (e.g. a key quota next to a free-model
+    // allowance): show them all rather than picking none.
+    const fromAll = (Array.isArray(row?.limits) ? row.limits : [])
+      .flatMap(entry => (Array.isArray(entry?.windows) ? entry.windows : []))
+      .filter(window => round(window?.remaining_percent) != null)
+    if (fromAll.length > 0) return fromAll.slice(0, 4)
+    return (state.windows || []).filter(window => round(window?.remaining_percent) != null)
+  })()
+  const balance = state.balance
+  const codexFallback = row?.id === 'openai-codex' && balance && state.fallback
+  const planLabel = row?.plan || (row?.capability === 'balance' ? 'API credits' : row?.capability === 'usage' ? 'Subscription' : null)
+  const hasRates = Array.isArray(row?.pricing) && row.pricing.length > 0
+  const hasPeak = Boolean(row?.peak && typeof row.peak === 'object')
+  const updated = query.data?.fetched_at
+    ? new Date(query.data.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : null
 
   return jsxs('div', {
     style: { display: 'grid', gap: 0 },
@@ -1261,54 +1689,67 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
         children: [
           jsxs('div', { style: { minWidth: 0, display: 'grid', gap: 2 }, children: [
             jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }, children: [
-              jsx(StatusDot, { tone: row.available ? 'good' : 'muted' }),
-              jsx('strong', { style: { ...textPrimary, fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label })
+              jsx(StatusDot, { tone: row.available ? 'good' : 'muted' }, 'dot'),
+              jsx('strong', { style: { ...textPrimary, fontSize: 13, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: row.label }, 'label'),
+              planLabel ? jsx(Badge, { variant: 'outline', size: 'xs', children: planLabel }, 'plan') : null
             ] }),
-            jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: model || scope.fetchProfile })
-          ] }),
+            jsx('span', { style: { ...textQuaternary, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [model, scope.fetchProfile !== scope.activeProfile ? scope.fetchProfile : null].filter(Boolean).join(' · ') || scope.fetchProfile }, 'model')
+          ] }, 'identity'),
           refreshButton
         ]
       }),
       jsxs('div', {
-        style: { display: 'grid', gap: 12, padding: '12px 14px' },
+        style: { display: 'grid', gap: 13, padding: '13px 14px 12px' },
         children: [
-          // Funding headline (compact)
-          jsxs('div', {
-            style: { borderLeft: '2px solid var(--ui-accent)', padding: '2px 0 2px 10px', display: 'grid', gap: 1 },
-            children: [
-              jsx('span', { style: { ...textTertiary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.07em' }, children: 'Current request funding' }),
-              jsx('strong', { style: { ...textPrimary, fontSize: 15, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }, children: fundingHeadline }),
-              jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: fundingDetail })
-            ]
-          }),
-          // Governing meters, compact
-          windows.length > 0
-            ? jsxs('div', { style: { display: 'grid', gap: 8 }, children: windows.map(window => jsxs('div', {
-                style: { display: 'grid', gap: 4 },
+          row?.id === 'xai-oauth' && legacyPlanNote(row?.plan)
+            ? jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.45 }, children: legacyPlanNote(row.plan) }, 'plan-lag')
+            : null,
+          codexFallback
+            ? jsxs('div', {
+                style: { display: 'grid', gap: 10 },
                 children: [
-                  jsxs('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }, children: [
-                    jsx('span', { style: { ...textSecondary, fontSize: 10, fontWeight: 500 }, children: cleanWindowLabel(window) }),
-                    jsx('strong', { style: { ...textPrimary, color: meterTone(window), fontSize: 11, fontVariantNumeric: 'tabular-nums' }, children: `${round(window.remaining_percent)}% left` })
+                  jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [
+                    jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 14, height: 14, color: 'var(--ui-orange)' } }, 'icon'),
+                    jsx('span', { style: { ...textSecondary, fontSize: 11.5, lineHeight: 1.45 }, children: 'Subscription allowance exhausted — requests bill from paid credits.' }, 'text')
                   ] }),
-                  jsx('div', {
-                    role: 'progressbar',
-                    'aria-label': `${cleanWindowLabel(window)} remaining`,
-                    'aria-valuemin': 0,
-                    'aria-valuemax': 100,
-                    'aria-valuenow': round(window.remaining_percent),
-                    style: { height: 4, borderRadius: 2, overflow: 'hidden', background: 'var(--ui-bg-quaternary)' },
-                    children: jsx('div', { style: { width: progressWidth(window), height: '100%', borderRadius: 2, background: meterTone(window) } })
-                  }),
-                  jsx('span', { style: { ...textQuaternary, fontSize: 10, lineHeight: 1.4 }, children: windowMeta(window) })
+                  jsx(BalanceMetric, { balance, prominent: true }, 'balance')
                 ]
-              }, `meter-${window?.label}`)) })
+              }, 'fallback')
             : null,
-          // Balance, if any
-          state.balance
-            ? jsx(BalanceMetric, { balance: state.balance, subdued: row?.id === 'openai-codex' })
+          !codexFallback && limitWindows.length > 0
+            ? jsx('div', {
+                style: { display: 'grid', gap: 10 },
+                children: limitWindows.slice(0, 4).map(window => jsx(UsageMeter, { window, compact: true }, `meter-${window?.label}`))
+              }, 'meters')
             : null,
-          // Pin the expand button at the bottom
-          jsx('div', { style: { borderTop: HAIRLINE, paddingTop: 10, marginTop: 2 }, children: viewAll })
+          jsx(BreakdownPanel, { row, compact: true }, 'breakdown'),
+          !codexFallback && balance
+            ? jsx(BalanceMetric, { balance, prominent: true }, 'balance')
+            : null,
+          row?.key_usage
+            ? jsx(KeyUsagePanel, { keyUsage: row.key_usage, compact: true }, 'key-usage')
+            : null,
+          !codexFallback && limitWindows.length === 0 && !balance && !row?.activity
+            ? jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5 }, children: row?.available ? 'No usage windows or balance are reported for this provider.' : (row?.unavailable_reason || 'Usage unavailable.') }, 'empty')
+            : null,
+          row?.activity
+            ? jsx(ActivityPanel, { activity: row.activity, compact: true }, 'activity')
+            : null,
+          row?.cache
+            ? jsx(CachePanel, { cache: row.cache, compact: true }, 'cache')
+            : null,
+          hasRates || hasPeak
+            ? jsx(RatesPanel, { row, compact: true, always: true }, 'rates')
+            : null,
+          jsxs('div', {
+            style: { display: 'grid', gap: 8, borderTop: HAIRLINE, paddingTop: 11, marginTop: 1 },
+            children: [
+              viewAll,
+              updated
+                ? jsx('span', { style: { ...textQuaternary, fontSize: 9.5, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }, children: `Updated ${updated}` }, 'updated')
+                : null
+            ]
+          }, 'footer')
         ]
       })
     ]
@@ -1326,10 +1767,8 @@ function ProviderUsagePage({ ctx, initialProvider = '' }) {
   const gateway = useValue(host.state.gateway)
   const scope = resolveUsageScope({ focusedOwner, hasFocusedOwner, focusedProfile, activeConnectionId, activeProfile })
 
-  // Divergence fails closed: the focused chat is owned by another source than
-  // the active socket ctx.rest can reach, so we neither fetch nor probe — we
-  // gate and tell the user to switch.
-  if (scope.diverged) {
+  // Another machine only. Local profiles are read directly.
+  if (scope.unreachable) {
     return jsx(GatedUsagePage, { scope })
   }
   return jsx(ProviderUsagePageBody, { ctx, initialProvider, model, sessionId, gateway, scope })
@@ -1349,8 +1788,10 @@ function GatedUsagePage({ scope }) {
     style: { height: 'calc(100% - 58px)', display: 'grid', placeItems: 'center', textAlign: 'center', gap: 12, padding: 24 },
     children: [
       jsx(StatusDot, { tone: 'warn', style: { width: 12, height: 12 } }),
-      jsx('strong', { style: { ...textSecondary, fontSize: 13, fontWeight: 600 }, children: `The focused chat is in ${scope.focusProfile}` }),
-      jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, maxWidth: 340 }, children: `Provider usage follows the active profile's socket. Switch to ${scope.focusProfile} to view its provider usage here.` })
+      jsx('strong', { style: { ...textSecondary, fontSize: 13, fontWeight: 600 }, children: scope.ambiguous ? 'Account scope could not be identified' : `${scope.focusProfile} is on another connection` }),
+      jsx('span', { style: { ...textTertiary, fontSize: 11, lineHeight: 1.5, maxWidth: 340 }, children: scope.ambiguous
+        ? 'The focused chat did not resolve to one account. Provider usage is hidden rather than guessed.'
+        : 'This gateway can read provider accounts for profiles on this machine. It cannot read that connection.' })
     ]
   })
   return jsxs('div', { style: { height: '100%', minWidth: 0, overflow: 'hidden', color: 'var(--ui-text-primary)', fontSize: 12 }, children: [header, body] })
@@ -1361,12 +1802,13 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
   const provider = useActiveProvider(sessionId, initialProvider, scope.fetchProfile, scope.ownerConnection, scope.sourceId)
   const query = useOverview(ctx, provider, model, scope.fetchProfile, gateway, scope.sourceId)
-  const rawRows = Array.isArray(query.data?.providers) ? query.data.providers : []
+  const matched = accountMatches(query.data, scope.fetchProfile, scope.activeProfile) ? query.data : null
+  const rawRows = Array.isArray(matched?.providers) ? matched.providers : []
   const rows = mergeOpenCodeRows(rawRows, provider)
-  const selected = activeRow({ ...query.data, providers: rows }, provider)
-  const activeId = selected?.id || normaliseProvider(query.data?.active?.provider)
-  const available = rows.filter(row => row.available && row.id !== activeId)
-  const limited = rows.filter(row => !row.available && row.id !== activeId)
+  const selected = activeRow({ ...matched, providers: rows }, provider)
+  const activeId = selected?.id || ''
+  const available = rows.filter(row => rowHasFunding(row) && row.id !== activeId)
+  const limited = rows.filter(row => !rowHasFunding(row) && row.id !== activeId)
   const hasRows = rows.length > 0
   const refetchError = Boolean(query.isError) && hasRows
   const backendNotEnabled = ready && Boolean(query.isError) && !hasRows && isBackendNotEnabled(query.error)
@@ -1386,6 +1828,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
       'aria-label': 'Refresh provider usage',
       onClick: () => {
         haptic('tap')
+        requestSourcesRefresh = true
         void query.refetch()
       },
       children: jsx(icons.RefreshCw, { 'aria-hidden': true })
@@ -1475,7 +1918,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
               ]
             }, 'accounts-header'),
             available.length > 0
-              ? available.map(row => jsx(ProviderDisclosure, { row }, row.id))
+              ? jsx('div', { style: { display: 'grid', gap: 8 }, children: available.map(row => jsx(ProviderDisclosure, { row }, row.id)) }, 'account-cards')
               : jsx('div', { style: { ...textTertiary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }, 'empty-accounts'),
             jsx(LimitedProviders, { rows: limited }, 'limited'),
             jsx('footer', {
@@ -1494,7 +1937,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   })
 }
 
-export { activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { activeSourceId, compactFundingSummary, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'provider-usage',

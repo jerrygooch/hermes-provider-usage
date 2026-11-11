@@ -119,9 +119,19 @@ if (!chipContribution || !pageContribution) throw new Error('chip/page not regis
 const renderChip = () => renderToStaticMarkup(React.createElement(chipContribution.render))
 const renderPage = () => renderToStaticMarkup(React.createElement(pageContribution.render))
 
-const fixture = fetchedAt => ({
+// The provider is resolved asynchronously from the focused session. Under SSR
+// effects do not run, so seed the account memory the hook starts from (a real
+// mounted lifecycle is covered by plugin_lifecycle_test.mjs).
+const { activeSourceId, rememberProvider } = mod.namespace
+function seedProvider(profile = 'default', provider = 'xai-oauth') {
+  world.sessionId = ''
+  rememberProvider(activeSourceId(world.connectionId, profile), provider)
+}
+
+const fixture = (fetchedAt, account = 'default') => ({
   version: 1,
   fetched_at: fetchedAt,
+  account_profile: account,
   active: { provider: 'xai-oauth', model: 'mimo-v2.5' },
   default_provider: 'xai-oauth',
   providers: [
@@ -154,6 +164,7 @@ world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'open'
+seedProvider('default')
 queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
 const chipLoaded = renderChip()
@@ -170,26 +181,44 @@ world.connectionId = 'local'
 world.focusedOwner = { connectionId: 'local', profile: 'default' }
 world.focusedProfile = 'default'
 world.gateway = 'open'
+seedProvider('default')
 queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 const chipVerified = renderChip()
 check('verified focus renders normal usage (not a gate)', chipVerified, '62% left')
 
-// Diverged focus: the focused chat is Alice but the active socket is default.
-// #2 must FAIL CLOSED into a gate — no fetching/probe of a foreign account.
+// Local bot profile: the focused chat is Alice, the active socket is default,
+// both on this machine. v0.9+ fetches Alice with profile scope instead of
+// forcing a profile switch.
 world.profile = 'default'
 world.connectionId = 'local'
 world.focusedOwner = { connectionId: 'local', profile: 'Alice' }
 world.focusedProfile = 'Alice'
 world.gateway = 'open'
-const chipDiverged = renderChip()
-check('#2 diverged chip shows a gate keyed to the focus profile', chipDiverged, 'Usage on Alice')
-check('#2 diverged chip tooltip tells the user to switch', chipDiverged, 'Switch the active profile to Alice')
-nocheck('#2 diverged chip does NOT show active accounting under foreign focus', chipDiverged, '62% left')
+seedProvider('Alice')
+queryResult = { data: fixture('2026-09-07T12:00:00Z', 'Alice'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
+const chipLocalBot = renderChip()
+check('local bot chip renders the focused profile usage', chipLocalBot, '62% left')
+nocheck('local bot chip is not gated', chipLocalBot, 'Other connection')
 
-const pageDiverged = renderPage()
-check('#2 diverged page names the focus profile', pageDiverged, 'The focused chat is in Alice')
-check('#2 diverged page tells the user to switch', pageDiverged, 'Switch to Alice to view its provider usage here')
-nocheck('#2 diverged page does NOT display active-account rows', pageDiverged, 'Account limits &amp; credits')
+const pageLocalBot = renderPage()
+check('local bot page names the scope profile', pageLocalBot, 'Scope Alice')
+check('local bot page keeps the account rows', pageLocalBot, 'Account limits &amp; credits')
+
+// Other connection: same profile name on another socket is unreachable. Gate;
+// never fetch or display this machine's same-named account.
+world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = { connectionId: 'remote-focus', profile: 'Alice' }
+world.focusedProfile = 'Alice'
+world.gateway = 'open'
+const chipRemote = renderChip()
+check('#2 remote chip shows a gate', chipRemote, 'Other connection')
+nocheck('#2 remote chip does NOT show local accounting', chipRemote, '62% left')
+
+const pageRemote = renderPage()
+check('#2 remote page names the focused profile', pageRemote, 'Alice is on another connection')
+check('#2 remote page explains the connection boundary', pageRemote, 'cannot read that connection')
+nocheck('#2 remote page does NOT display local-account rows', pageRemote, 'Account limits &amp; credits')
 
 // Reconnect (same profile, socket NOT ready): last rows stay visible as stale.
 world.profile = 'default'
@@ -197,6 +226,7 @@ world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
 world.gateway = 'closed'
+seedProvider('default')
 queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {} }
 
 const chipReconnecting = renderChip()
@@ -224,6 +254,7 @@ world.gateway = 'open'
 world.connectionId = 'local'
 world.focusedOwner = null
 world.focusedProfile = ''
+seedProvider('default')
 queryResult = { data: fixture('2026-09-07T12:00:00Z'), isLoading: false, isError: true, isFetching: false, error: new Error('boom'), refetch: () => {} }
 const pageStaleRefresh = renderPage()
 check('#5 refetch-error with rows keeps the rows', pageStaleRefresh, 'Account limits &amp; credits')
