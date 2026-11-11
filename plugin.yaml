@@ -9,17 +9,16 @@ license: MIT
 homepage: https://github.com/jerrygooch/hermes-provider-usage
 manifest_version: 2
 # Host feature dependency (recorded honestly):
-# This build reads every provider through the public provider-usage core seam:
-#   * 622eb3219f — read-only fetch_account_usage for the built-in providers,
-#     exact provider bodies on snapshot.raw, list_account_usage_identities and
-#     provider_credential_summary (non-secret account namespace/presence);
-#   * a4c484eb5d — delegation publishes the resolved provider and the same
-#     non-secret account id for running children.
-# No Hermes release contains those commits at the time of this candidate, so
-# there is deliberately NO requires_hermes release floor: >=0.23.1 would be
-# false and a newer number would be invented. An older host loads the plugin and
-# each adapter reports an explicit upgrade-required row; there is no raw
-# runtime-key or credential-store fallback.
+#   * Stock Hermes 0.23.1 provides agent.account_usage.fetch_account_usage
+#     (read_only=True) for Codex, Anthropic, OpenRouter and the provider-profile
+#     Go hook. That is the only required core route.
+#   * Newer builds add optional helpers used when present: exact provider bodies
+#     on snapshot.raw, list_account_usage_identities and
+#     provider_credential_summary (non-secret account namespace/presence), and
+#     the xAI broker. Their absence degrades one row; it does not disable the
+#     plugin. xAI credits stay unavailable with an official account link until
+#     the host brokers that sign-in.
+requires_hermes: ">=0.23.1"
 requires_auth:
   - openai-codex
   - xai-oauth
@@ -29,3 +28,25 @@ optional_env:
     description: Optional key for the bundled Moonshot / Kimi balance definition.
   - name: ELEVENLABS_API_KEY
     description: Optional key for the bundled ElevenLabs subscription definition.
+  - name: ANTHROPIC_API_KEY
+    description: Optional Anthropic API key used only to label the Claude card's inference connection.
+  - name: GEMINI_API_KEY
+    description: Optional Gemini API key used only to label the Gemini card's inference connection.
+  - name: GOOGLE_API_KEY
+    description: Optional alternate Gemini API key used only for presence.
+  - name: GLM_API_KEY
+    description: Optional Z.ai/GLM key used only to label the Z.ai card's inference connection.
+  - name: ZAI_API_KEY
+    description: Optional alternate Z.ai key used only for presence.
+  - name: Z_AI_API_KEY
+    description: Optional alternate Z.ai key used only for presence.
+  - name: OPENROUTER_API_KEY
+    description: Optional OpenRouter key for the stock supplemental credits/key detail.
+  - name: DEEPSEEK_API_KEY
+    description: Optional DeepSeek key for the stock balance endpoint.
+  - name: OLLAMA_API_KEY
+    description: Optional Ollama key for the stock usage/balance endpoints.
+  - name: OPENCODE_ZEN_API_KEY
+    description: Optional OpenCode Zen key for the stock authenticated-access check.
+  - name: OPENCODE_GO_API_KEY
+    description: Optional OpenCode Go key used only for presence; usage is read by the core provider hook.

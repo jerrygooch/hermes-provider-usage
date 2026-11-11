@@ -6,17 +6,17 @@ remains a bounded, per-provider route — it is not a universal proxy.
 
 - Candidate: `C:/Users/jerry/projects/hermes-provider-usage-ext`
   (branch `provider-extensibility`, existing dirty tree preserved).
-- Required core commit until a release contains it:
-  `dbe0bcec0d6c3e84acd99c6cb0072561c84fa623`
+- Optional enhanced broker: `dbe0bcec0d6c3e84acd99c6cb0072561c84fa623`
   (`plugin requests: brokered xAI Grok sign-in, bytes bodies, URL hardening`).
+  It is **not required** to ship the plugin; stock `0.23.1` does not have the
+  `xai-oauth` route, so the row stays unavailable with the official Grok link.
 - Additive core seams (separate worktree, not the installed core):
   `C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`,
   current HEAD `a4c484eb5d` (includes `dbe0bcec0d`, `622eb3219f`, and the
   cherry-picked delegation metadata `13152f4603`).
-- No prerelease version was invented. `plugin.yaml` stays `0.10.0` and now has
-  **no `requires_hermes` floor**; the exact core commit is the dependency until
-  a Hermes release carries both the broker and the public usage seams. See the
-  manifest comment rather than a false `>=0.21.6`.
+- No prerelease version was invented. `plugin.yaml` stays `0.10.0` and floors at
+  the released stock baseline `>=0.23.1`; the broker and identity helpers are
+  optional enhancements documented in `docs/stock-support.md`.
 
 ## What changed in the plugin
 
@@ -34,10 +34,10 @@ remains a bounded, per-provider route — it is not a universal proxy.
   **not** fall back: `ProviderNotSignedIn`/`PermissionError`/HTTP 401/403
   produce an unavailable row with the safe reason instead of trying the other
   route. `/v1/settings` plan metadata stays optional, exactly as before.
-- On a core without the `xai-oauth` broker route (including the currently
+- On a stock core without the `xai-oauth` broker route (including the currently
   installed `0.23.1`, whose helper only declares `openai-codex`), the adapter
-  returns a clear upgrade-required row. It does **not** read a raw runtime token
-  and has no legacy fallback.
+  returns an unavailable row with the official Grok account link. It does **not**
+  read a raw runtime token and has no legacy fallback.
 - `_serialize_snapshot` now reads the additive core `snapshot.raw` shape
   `{"credits": …, "key": …}` for OpenRouter, through the shared
   `_openrouter_row()` normalizer. No current adapter calls it yet; this is the

@@ -10,6 +10,8 @@ import concurrent.futures
 import copy
 import hashlib
 import html
+import importlib.util
+import inspect
 import ipaddress
 import json
 import logging
@@ -18,6 +20,7 @@ import os
 import re
 import socket
 import struct
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,7 +29,7 @@ from typing import Any, Iterable, Optional
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -44,6 +47,84 @@ _PROVIDER_LABELS = {
     "ollama-cloud": "Ollama Cloud",
 }
 _SUPPORTED = {"openai-codex", "openrouter", "deepseek", "xai-oauth", "nous", "anthropic", "opencode-go", "opencode-zen", "ollama-cloud"}
+# Code-owned official account-management landings. These are external links
+# only: opening one never changes a plan, payment method, or credential from
+# this plugin. Subscription and API products are deliberately separate even
+# when one vendor sells both (ChatGPT vs OpenAI API, Claude vs Anthropic
+# Console, Grok vs xAI Console, Google AI Studio, Z.ai Coding Plan vs API).
+# Keep stable official landing/settings pages here; do not add fragile
+# per-invoice or per-key deep links, and do not accept this map from config.
+_MANAGE_LINKS: dict[str, tuple[dict[str, str], ...]] = {
+    "openai-codex": (
+        {"label": "Manage account", "product": "ChatGPT / Codex usage settings", "kind": "subscription",
+         "url": "https://chatgpt.com/codex/settings/usage"},
+    ),
+    "openai-api": (
+        {"label": "Manage API", "product": "OpenAI API", "kind": "api",
+         "url": "https://platform.openai.com/settings/organization/billing/overview"},
+    ),
+    "anthropic": (
+        {"label": "Manage account", "product": "Claude usage settings", "kind": "subscription",
+         "url": "https://claude.ai/settings/usage"},
+        {"label": "Manage API", "product": "Anthropic Console", "kind": "api",
+         "url": "https://platform.claude.com/settings/billing"},
+    ),
+    "gemini": (
+        {"label": "Manage account", "product": "Google AI Studio", "kind": "api",
+         "url": "https://aistudio.google.com/"},
+    ),
+    "zai": (
+        {"label": "Manage account", "product": "Z.ai Coding Plan", "kind": "subscription",
+         "url": "https://z.ai/subscribe"},
+        {"label": "Manage API", "product": "Z.ai API", "kind": "api",
+         "url": "https://z.ai/manage-apikey/apikey-list"},
+    ),
+    "xai-oauth": (
+        {"label": "Manage account", "product": "Grok dashboard", "kind": "subscription",
+         "url": "https://grok.com/dashboard"},
+        {"label": "Manage API", "product": "xAI Console", "kind": "api",
+         "url": "https://console.x.ai/"},
+    ),
+    "openrouter": (
+        {"label": "Manage account", "product": "OpenRouter credits", "kind": "api",
+         "url": "https://openrouter.ai/settings/credits"},
+    ),
+    "deepseek": (
+        {"label": "Manage account", "product": "DeepSeek Platform", "kind": "api",
+         "url": "https://platform.deepseek.com/"},
+    ),
+    "nous": (
+        {"label": "Manage account", "product": "Nous Portal", "kind": "account",
+         "url": "https://portal.nousresearch.com/"},
+    ),
+    "opencode-go": (
+        {"label": "Manage account", "product": "OpenCode Go", "kind": "subscription",
+         "url": "https://opencode.ai/go"},
+    ),
+    "opencode-zen": (
+        {"label": "Manage account", "product": "OpenCode Zen", "kind": "api",
+         "url": "https://opencode.ai/zen"},
+    ),
+    "ollama-cloud": (
+        {"label": "Manage API", "product": "Ollama API keys", "kind": "api",
+         "url": "https://ollama.com/settings/keys"},
+    ),
+}
+_SCOPE_MANAGE_LINKS: dict[tuple[str, str], tuple[dict[str, str], ...]] = {
+    ("anthropic", "claude-subscription"): _MANAGE_LINKS["anthropic"][:1],
+    ("anthropic", "anthropic-api"): _MANAGE_LINKS["anthropic"][1:],
+    ("gemini", "gemini-api-key"): _MANAGE_LINKS["gemini"],
+    ("gemini", "usage-billing"): (
+        {"label": "Manage account", "product": "Google AI Studio billing", "kind": "api",
+         "url": "https://aistudio.google.com/billing"},
+    ),
+    ("zai", "coding-plan"): _MANAGE_LINKS["zai"][:1],
+    ("zai", "standard-api"): _MANAGE_LINKS["zai"][1:],
+    ("zai", "endpoints"): (
+        {"label": "Docs", "product": "Z.ai endpoints", "kind": "docs",
+         "url": "https://docs.z.ai/devpack/quick-start"},
+    ),
+}
 # Always-listed provider connection cards. These are metadata, not adapters:
 # nothing here performs a request, reads a credential value, or carries a
 # balance/quota figure. ``provider`` is the Hermes provider slug whose
@@ -301,6 +382,37 @@ def _window(label: str, used: Any, reset_at: Any = None, detail: Optional[str] =
     }
 
 
+def _safe_https_url(value: Any) -> Optional[str]:
+    """Return an HTTPS URL with a host and no embedded credentials, else None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        return None
+    return text
+
+
+def _manage_links_for(provider: str, scope_id: Optional[str] = None) -> list[dict[str, str]]:
+    """Code-owned official account links for one provider or product scope."""
+    source = _SCOPE_MANAGE_LINKS.get((provider, scope_id), ()) if scope_id else _MANAGE_LINKS.get(provider, ())
+    links: list[dict[str, str]] = []
+    for item in source or ():
+        url = _safe_https_url(item.get("url"))
+        if not url:
+            continue
+        links.append({
+            "label": str(item.get("label") or "Manage account"),
+            "product": str(item.get("product") or ""),
+            "kind": str(item.get("kind") or "account"),
+            "url": url,
+        })
+    return links
+
+
 def _base(provider: str, *, title: str, source: str, plan: Optional[str] = None) -> dict[str, Any]:
     return {
         "id": provider,
@@ -312,6 +424,7 @@ def _base(provider: str, *, title: str, source: str, plan: Optional[str] = None)
         "fetched_at": _now(),
         "title": title,
         "plan": plan,
+        "manage_links": _manage_links_for(provider),
         "limits": [],
         "balances": [],
         "credit_status": None,
@@ -350,18 +463,24 @@ def _stamp_snapshot(row: dict[str, Any], snapshot: Any) -> dict[str, Any]:
     """Carry the core-owned, non-secret snapshot identity onto the row.
 
     ``identity_id``/``account_id``/``profile_scope`` are correlation ids the
-    delegation roster publishes; none is a token. A snapshot that could not
-    prove its credential leaves them absent so callers render "unknown" rather
-    than attach another account's balance.
+    delegation roster publishes; none is a token. Stock core names the stable
+    account id ``snapshot.identity``; newer hosts expose ``identity_id``. The
+    stock field is mapped to ``identity_id`` so a per-account read can be
+    checked against the identity it was requested for. A snapshot that could
+    not prove its credential leaves them absent so callers render "unknown"
+    rather than attach another account's balance.
     """
     fetched_at = getattr(snapshot, "fetched_at", None)
     if isinstance(fetched_at, datetime):
         row["fetched_at"] = _datetime(fetched_at) or row["fetched_at"]
     for source, key in (
         ("identity_id", "identity_id"),
+        ("identity", "identity_id"),
         ("account_id", "account_id"),
         ("profile_scope", "profile_scope"),
     ):
+        if str(row.get(key) or "").strip():
+            continue
         value = str(getattr(snapshot, source, None) or "").strip()
         if value:
             row[key] = value
@@ -417,6 +536,12 @@ def _serialize_snapshot(snapshot: Any) -> dict[str, Any]:
         windows.append(window)
     if windows:
         row["limits"] = [{"id": "default", "label": row["title"], "windows": windows}]
+    if provider == "openai-codex":
+        # Per-account snapshots must keep the reset block; the provider-wide
+        # Codex row is richer, but both are read-only projections of core's raw body.
+        reset_block = _codex_reset_credits_block(raw)
+        if reset_block:
+            row["reset_credits"] = reset_block
     row["details"] = [str(value) for value in (getattr(snapshot, "details", ()) or ())]
     reason = getattr(snapshot, "unavailable_reason", None)
     row["unavailable_reason"] = str(reason) if reason else None
@@ -436,91 +561,148 @@ def _safe_request_error(exc: BaseException) -> str:
 
 
 _CORE_SEAM_UPGRADE = (
-    "This Hermes build does not expose the read-only provider-usage core seam "
-    "(fetch_account_usage(read_only=True) with provider bodies and non-secret account "
-    "identities). Upgrade Hermes to a build containing core commits 622eb3219f and "
-    "a4c484eb5d, or a release that includes them. The plugin keeps no token and has no "
-    "raw-credential fallback."
+    "This Hermes build does not expose the read-only provider-usage snapshot API "
+    "(fetch_account_usage(read_only=True)). Upgrade Hermes to a build with that "
+    "read-only route. The plugin keeps no token and has no raw-credential fallback."
 )
+
+# Profile-scoped env names Hermes itself uses for each API-key provider. Values
+# are read only through agent.secret_scope.get_secret (never os.environ) and only
+# for presence labels or that provider's fixed official usage endpoint.
+_PROVIDER_ENV_SECRETS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "zai": ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "ollama-cloud": ("OLLAMA_API_KEY",),
+    "opencode-zen": ("OPENCODE_ZEN_API_KEY",),
+    "opencode-go": ("OPENCODE_GO_API_KEY",),
+}
+# Stock Hermes has API-key-only products here: presence can be answered from the
+# profile env without reading a credential store. OAuth/pool-capable providers
+# stay "unknown" when no env key exists.
+_API_KEY_ONLY = frozenset({
+    "gemini", "zai", "openrouter", "deepseek", "ollama-cloud", "opencode-zen", "opencode-go",
+})
+
+
+def _core_helper(name: str) -> Any:
+    """Return a core account-usage helper, or None on a build that lacks it."""
+    try:
+        from agent import account_usage
+
+        helper = getattr(account_usage, name, None)
+    except Exception:
+        return None
+    return helper if callable(helper) else None
 
 
 def _core_seam_available() -> bool:
-    """True only when every public usage seam this plugin relies on is present.
+    """True when the read-only usage snapshot route exists (stock 0.23.1 does).
 
-    Older Hermes builds have a partial account-usage module. Calling through it
-    would either lose the raw provider body or fall back to a non-read-only fetch
-    that may rotate a credential, so the adapters report an upgrade-required row
-    instead of using a legacy path.
+    Enhanced helpers (identity inventory, non-secret credential summary, xAI
+    broker) are probed individually where used, never as one global gate.
     """
-    try:
-        from agent.account_usage import (  # noqa: F401
-            fetch_account_usage,
-            list_account_usage_identities,
-            provider_credential_summary,
-        )
-    except Exception:
-        return False
-    return all(
-        callable(value)
-        for value in (fetch_account_usage, list_account_usage_identities, provider_credential_summary)
-    )
+    return _core_helper("fetch_account_usage") is not None
 
 
 def _core_usage(provider: str, *, identity_id: Optional[str] = None) -> Any:
-    """Read one provider/account snapshot through the public core seam.
+    """Read one provider/account snapshot through the public core route.
 
     ``identity_id`` is the exact non-secret id from
     ``list_account_usage_identities``; core resolves the pooled credential. A
-    missing identity returns ``None`` and is never retried as a provider-wide
-    read, which would borrow another account's pool.
+    missing identity or a core without identity-scoped reads returns ``None``
+    and is never retried as a provider-wide read.
     """
-    if not _core_seam_available():
+    fetch = _core_helper("fetch_account_usage")
+    if fetch is None:
         return None
-    from agent.account_usage import fetch_account_usage
-
-    return fetch_account_usage(provider, read_only=True, identity_id=identity_id)
+    kwargs: dict[str, Any] = {"read_only": True}
+    if identity_id is not None:
+        try:
+            params = inspect.signature(fetch).parameters.values()
+        except (TypeError, ValueError):
+            return None
+        if not any(
+            param.name == "identity_id" or param.kind is inspect.Parameter.VAR_KEYWORD
+            for param in params
+        ):
+            return None
+        kwargs["identity_id"] = identity_id
+    try:
+        return fetch(provider, **kwargs)
+    except Exception:
+        log.debug("provider-usage snapshot failed for %s", provider, exc_info=True)
+        return None
 
 
 def _credential_summary(provider: str) -> dict[str, Any]:
-    """Non-secret presence summary from core; no credential value crosses this call."""
+    """Non-secret presence summary when the host offers one; no credential value."""
+    summary = _core_helper("provider_credential_summary")
+    if summary is None:
+        return {}
     try:
-        from agent.account_usage import provider_credential_summary
-
-        return provider_credential_summary(provider) or {}
+        value = summary(provider) or {}
     except Exception:
         return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _local_presence(provider: str) -> tuple[bool, str, bool]:
+    """Return ``(configured, source, known)`` without reading a credential store.
+
+    Core's non-secret summary wins when present. On a stock host the only safe
+    presence signal is the profile-scoped env key Hermes itself would use; an
+    absent key is conclusive only for API-key-only products. OAuth/pool
+    providers stay explicitly unknown rather than being called "not connected".
+    """
+    summary = _credential_summary(provider)
+    if isinstance(summary, dict) and "configured" in summary:
+        return bool(summary.get("configured")), str(summary.get("source") or "none"), True
+    for name in _PROVIDER_ENV_SECRETS.get(provider, ()):
+        if _read_definition_secret(name):
+            return True, "env", True
+    return False, "none", provider in _API_KEY_ONLY
 
 
 def _provider_unavailable(provider: str) -> dict[str, Any]:
-    """An honest unavailable row: missing credentials vs. missing core seam."""
+    """An honest unavailable row: missing route, missing key, or a failed read."""
     if not _core_seam_available():
         return _unavailable(provider, _CORE_SEAM_UPGRADE)
-    if not _credential_summary(provider).get("configured"):
-        label = _PROVIDER_LABELS.get(provider, provider)
-        return _unavailable(provider, f"{label} credentials are not configured.")
+    configured, _source, known = _local_presence(provider)
     label = _PROVIDER_LABELS.get(provider, provider)
+    if known and not configured:
+        return _unavailable(provider, f"{label} credentials are not configured in this profile.")
     return _unavailable(provider, f"{label} usage is unavailable for this account.")
 
 
 def _connection_cards() -> list[dict[str, Any]]:
     """Always-listed connection cards for popular providers.
 
-    Presence comes only from core's non-secret credential summary. This
-    function performs no request and returns no balance, quota, usage window,
-    or credential value: an unconnected card says so instead of showing zeros.
+    Presence comes from core's non-secret credential summary when the host
+    offers it, otherwise from the profile-scoped env key Hermes itself uses.
+    This function performs no request and returns no balance, quota, usage
+    window, or credential value: an unconnected or unverifiable card says so
+    instead of showing zeros.
     """
     core_ok = _core_seam_available()
     cards: list[dict[str, Any]] = []
     for spec in _CONNECTION_CARDS:
         provider = str(spec["provider"])
-        summary = _credential_summary(provider) if core_ok else {}
-        configured = bool(summary.get("configured"))
-        source = str(summary.get("source") or "none")
+        configured, source, known = _local_presence(provider) if core_ok else (False, "none", False)
         if not core_ok:
             state = "unavailable"
             state_detail = (
-                "This Hermes build does not expose non-secret provider credential presence. "
+                "This Hermes build does not expose the read-only usage snapshot API. "
                 "Upgrade Hermes to distinguish connected from unconnected accounts."
+            )
+        elif not known:
+            state = "unavailable"
+            state_detail = (
+                f"This build cannot verify the {spec['name']} sign-in without a non-secret "
+                "credential summary. Open the provider's own account page to confirm it; this "
+                "card performs no request."
             )
         elif not configured:
             state = "not_connected"
@@ -534,7 +716,8 @@ def _connection_cards() -> list[dict[str, Any]]:
             state = "connected_no_usage"
             state_detail = (
                 "An Anthropic API key is configured for inference. Claude subscription limits require "
-                "a Claude Code OAuth sign-in; API usage needs separate organization Admin API access."
+                "a Claude Code OAuth sign-in; API usage needs separate organization Admin API access. "
+                "An API key neither proves nor disproves an OAuth sign-in, so subscription status is unverified."
             )
         elif provider == "gemini":
             state = "connected_no_usage"
@@ -552,20 +735,24 @@ def _connection_cards() -> list[dict[str, Any]]:
         scopes: list[dict[str, Any]] = []
         for scope in spec["scopes"]:
             item = copy.deepcopy(scope)
+            item["manage_links"] = _manage_links_for(provider, str(item.get("id") or ""))
             static_state = item.pop("static_state", None)
             if static_state:
                 item["state"] = static_state
-            elif not core_ok:
+            elif not core_ok or not known:
                 item["state"] = "unavailable"
             elif not configured:
                 item["state"] = "not_connected"
             elif provider == "anthropic" and item["id"] == "claude-subscription":
-                item["state"] = (
-                    "connected" if _anthropic_subscription_connected(source) else "not_connected"
-                )
-                if item["state"] == "not_connected":
+                subscription = _anthropic_subscription_state(source)
+                if subscription == "connected":
+                    item["state"] = "connected"
+                else:
+                    item["state"] = "unverified"
                     item["state_detail"] = (
-                        "No Claude Code OAuth sign-in was found; an API key is inference-only."
+                        "No authenticated Claude Code OAuth context is available to this build, and an "
+                        "API key neither proves nor disproves one. Sign in with Claude Code in this "
+                        "profile to read subscription limits."
                     )
             elif provider == "zai":
                 item["state"] = "unverified"
@@ -589,26 +776,108 @@ def _connection_cards() -> list[dict[str, Any]]:
             "setup": copy.deepcopy(spec["setup"]),
             "docs_url": spec["docs_url"],
             "links": copy.deepcopy(spec["setup"]["links"]),
+            "manage_links": _manage_links_for(provider),
             "verification": spec["verification"],
         })
     return cards
 
 
-def _anthropic_subscription_connected(source: str) -> bool:
-    """True only when an OAuth-shaped Claude credential is present.
+def _anthropic_subscription_state(source: str) -> str:
+    """Whether a Claude Code OAuth grant is proven, absent, or unverifiable.
 
-    A bare Anthropic API key is a separate product and must not read as a
-    Claude subscription. Pool rows expose a non-secret auth_type; inspect only
-    that metadata, never a token.
+    An Anthropic API key is a separate inference credential: its presence says
+    nothing about a Claude Code OAuth sign-in, so an env/config key is
+    ``unknown`` rather than ``not_connected``.  Pool rows may expose a
+    non-secret ``auth_type``; only that metadata is inspected, never a token.
     """
     if source == "oauth":
-        return True
-    if source != "pool":
-        return False
-    return any(
-        "oauth" in str(account.get("auth_type") or "").lower()
-        for account in _account_identities("anthropic")
-    )
+        return "connected"
+    if source == "pool":
+        return (
+            "connected"
+            if any(
+                "oauth" in str(account.get("auth_type") or "").lower()
+                for account in _account_identities("anthropic")
+            )
+            else "unknown"
+        )
+    return "unknown"
+
+
+def _anthropic_subscription_connected(source: str) -> bool:
+    """True only when an OAuth-shaped Claude credential is proven present."""
+    return _anthropic_subscription_state(source) == "connected"
+
+
+_RESET_ENTRY_FIELDS = ("id", "reset_type", "status", "granted_at", "expires_at", "title", "description")
+
+
+def _codex_reset_entry(value: Any) -> Optional[dict[str, Any]]:
+    """Project only the seven official reset-credit fields; never synthesize."""
+    if not isinstance(value, dict):
+        return None
+    entry: dict[str, Any] = {}
+    for key in _RESET_ENTRY_FIELDS:
+        raw = value.get(key)
+        if key in {"granted_at", "expires_at"}:
+            text = str(raw or "").strip()
+            if text:
+                try:
+                    datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+                except ValueError:
+                    text = ""
+            entry[key] = text or None
+        else:
+            entry[key] = str(raw).strip() if raw is not None and str(raw).strip() else None
+    return entry if any(item is not None for item in entry.values()) else None
+
+
+def _codex_reset_credits_block(payload: Any) -> Optional[dict[str, Any]]:
+    """Read-only projection of core's Codex reset blocks.
+
+    Counts stay authoritative from ``rate_limit_reset_credits``.  The optional
+    per-credit rows come from ``rate_limit_reset_credits_details`` when a core
+    build supplies them; this parser also tolerates ``credits`` nested in the
+    summary block.  Expiry is copied only when the provider reports it.
+    """
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("rate_limit_reset_credits")
+    if not isinstance(summary, dict):
+        summary = {}
+    available = _number(summary.get("available_count"))
+    applicable = _number(summary.get("applicable_available_count"))
+    details = payload.get("rate_limit_reset_credits_details")
+    if not isinstance(details, dict):
+        details = {}
+    raw_entries = details.get("credits")
+    if not isinstance(raw_entries, list):
+        raw_entries = summary.get("credits") if isinstance(summary.get("credits"), list) else None
+    entries = None
+    if raw_entries is not None:
+        rows = [entry for entry in (_codex_reset_entry(item) for item in raw_entries) if entry is not None]
+        entries = rows or None
+    if available is None and applicable is None and entries is None:
+        return None
+    manage = _MANAGE_LINKS["openai-codex"][0]
+    if entries is None:
+        inventory_source = "usage_summary"
+        detail = "Per-credit expiry is not available from this core build; the provider count is authoritative."
+    else:
+        inventory_source = "reset_credits_api"
+        if any(entry.get("expires_at") for entry in entries):
+            detail = "Per-credit expiry is reported by the reset-credit inventory; the server selects the credit."
+        else:
+            detail = "No expiry is reported for any listed reset credit."
+    return {
+        "available": int(available) if available is not None else None,
+        "applicable": int(applicable) if applicable is not None else None,
+        "entries": entries,
+        "inventory_source": inventory_source,
+        "detail": detail,
+        "manage_url": manage["url"],
+        "manage_label": "Open Codex usage settings",
+    }
 
 
 def _fetch_codex() -> dict[str, Any]:
@@ -617,13 +886,9 @@ def _fetch_codex() -> dict[str, Any]:
     # refresh path. The decoded response body rides back on ``snapshot.raw``; the
     # groups core does not normalize yet (metered features, code review, spend
     # control) are read from it below instead of re-requesting the endpoint.
-    if not _core_seam_available():
-        return _provider_unavailable("openai-codex")
-    from agent.account_usage import fetch_account_usage
-
-    snapshot = fetch_account_usage("openai-codex", read_only=True)
+    snapshot = _core_usage("openai-codex")
     if snapshot is None:
-        raise RuntimeError("Codex usage is unavailable")
+        return _provider_unavailable("openai-codex")
     payload = getattr(snapshot, "raw", None)
     payload = dict(payload) if isinstance(payload, dict) else {}
     if not payload:
@@ -737,14 +1002,9 @@ def _fetch_codex() -> dict[str, Any]:
         "approx_local_messages": credits.get("approx_local_messages") if isinstance(credits.get("approx_local_messages"), list) else None,
         "approx_cloud_messages": credits.get("approx_cloud_messages") if isinstance(credits.get("approx_cloud_messages"), list) else None,
     }
-    reset_credits = payload.get("rate_limit_reset_credits") or {}
-    banked = _number(reset_credits.get("available_count"))
-    applicable_banked = _number(reset_credits.get("applicable_available_count"))
-    if banked is not None or applicable_banked is not None:
-        row["reset_credits"] = {
-            "available": int(banked or 0),
-            "applicable": int(applicable_banked or 0),
-        }
+    reset_block = _codex_reset_credits_block(payload)
+    if reset_block:
+        row["reset_credits"] = reset_block
 
     model_usage = payload.get("model_usage") or {}
     if isinstance(model_usage, dict):
@@ -772,15 +1032,68 @@ def _fetch_codex() -> dict[str, Any]:
 
 
 def _fetch_openrouter() -> dict[str, Any]:
-    # Fetch, credential resolution and the per-profile usage cache live in
-    # Hermes core. The decoded /credits and /key bodies ride back on
-    # ``snapshot.raw`` so this pane keeps its free-model quota, key spend and
-    # BYOK fields; a core build without them is an explicit upgrade row rather
-    # than a silently narrowed one.
+    # Core's read-only snapshot carries the decoded /credits and /key bodies on
+    # enhanced builds. Stock 0.23.1 returns the same snapshot without ``raw``;
+    # then the profile's own OPENROUTER_API_KEY may read the two documented
+    # official endpoints so the pane keeps its free-model quota and key spend.
     snapshot = _core_usage("openrouter")
-    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("credits"), dict):
-        return _provider_unavailable("openrouter")
-    return _serialize_snapshot(snapshot)
+    if snapshot is not None and isinstance(_snapshot_raw(snapshot).get("credits"), dict):
+        return _serialize_snapshot(snapshot)
+    direct = _direct_openrouter()
+    if direct is not None:
+        return direct
+    if snapshot is not None:
+        return _serialize_snapshot(snapshot)
+    return _provider_unavailable("openrouter")
+
+
+def _fixed_provider_get(url: str, token: str, *, host: str, timeout: float = 12.0) -> httpx.Response:
+    """GET one fixed official HTTPS origin with one profile-scoped key.
+
+    No caller-supplied base URL and no redirect following. The token is attached
+    here only; a redirect is refused rather than sent to a second origin.
+    """
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.hostname != host:
+        raise RuntimeError("provider endpoint is not the fixed official HTTPS origin")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        response = client.get(url, headers=headers)
+    if response.is_redirect:
+        raise RuntimeError("provider endpoint redirected; the request was refused")
+    response.raise_for_status()
+    return response
+
+
+def _mark_env_read(row: dict[str, Any], name: str) -> dict[str, Any]:
+    """Disclose that a row came from this profile's env key, not a pool account."""
+    note = f"Read with {name} from this Hermes profile; no pooled account is attributed."
+    if note not in row["details"]:
+        row["details"].append(note)
+    return row
+
+
+def _direct_openrouter() -> Optional[dict[str, Any]]:
+    token = _read_definition_secret("OPENROUTER_API_KEY")
+    if not token:
+        return None
+    try:
+        base = "https://openrouter.ai/api/v1"
+        credits_response = _fixed_provider_get(f"{base}/credits", token, host="openrouter.ai")
+        credits = (credits_response.json() or {}).get("data") or {}
+        key_data: dict[str, Any] = {}
+        try:
+            key_response = _fixed_provider_get(f"{base}/key", token, host="openrouter.ai")
+            key_data = (key_response.json() or {}).get("data") or {}
+        except Exception:
+            log.debug("OpenRouter /key endpoint unavailable", exc_info=True)
+        if not isinstance(credits, dict):
+            return None
+        row = _openrouter_row(credits, key_data if isinstance(key_data, dict) else {})
+        return _mark_env_read(row, "OPENROUTER_API_KEY")
+    except Exception:
+        log.debug("OpenRouter direct env read failed", exc_info=True)
+        return None
 
 
 def _openrouter_row(credits: dict[str, Any], key_data: dict[str, Any]) -> dict[str, Any]:
@@ -878,10 +1191,35 @@ def _deepseek_row(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fetch_deepseek() -> dict[str, Any]:
+    # Enhanced core returns the decoded /user/balance body on ``raw``; stock
+    # 0.23.1 has no DeepSeek fetcher. The profile's own DEEPSEEK_API_KEY is the
+    # sanctioned stock route to the fixed official balance endpoint.
     snapshot = _core_usage("deepseek")
-    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("balance"), dict):
-        return _provider_unavailable("deepseek")
-    return _serialize_snapshot(snapshot)
+    if snapshot is not None and isinstance(_snapshot_raw(snapshot).get("balance"), dict):
+        return _serialize_snapshot(snapshot)
+    direct = _direct_deepseek()
+    if direct is not None:
+        return direct
+    if snapshot is not None:
+        return _serialize_snapshot(snapshot)
+    return _provider_unavailable("deepseek")
+
+
+def _direct_deepseek() -> Optional[dict[str, Any]]:
+    token = _read_definition_secret("DEEPSEEK_API_KEY")
+    if not token:
+        return None
+    try:
+        response = _fixed_provider_get(
+            "https://api.deepseek.com/user/balance", token, host="api.deepseek.com", timeout=12.0,
+        )
+        payload = response.json() or {}
+        if not isinstance(payload, dict):
+            return None
+        return _mark_env_read(_deepseek_row(payload), "DEEPSEEK_API_KEY")
+    except Exception:
+        log.debug("DeepSeek direct env read failed", exc_info=True)
+        return None
 
 
 def _go_usage_windows(snapshot: Any) -> list[dict[str, Any]]:
@@ -992,10 +1330,32 @@ def _zen_row(models: Any = None) -> dict[str, Any]:
 
 
 def _fetch_opencode_zen() -> dict[str, Any]:
+    # Enhanced core normalizes the authenticated /models read; stock has no Zen
+    # fetcher, so the profile's own OPENCODE_ZEN_API_KEY may verify access at the
+    # fixed official origin. No wallet figure is invented either way.
     snapshot = _core_usage("opencode-zen")
-    if snapshot is None:
-        return _provider_unavailable("opencode-zen")
-    return _serialize_snapshot(snapshot)
+    if snapshot is not None:
+        return _serialize_snapshot(snapshot)
+    direct = _direct_opencode_zen()
+    if direct is not None:
+        return direct
+    return _provider_unavailable("opencode-zen")
+
+
+def _direct_opencode_zen() -> Optional[dict[str, Any]]:
+    token = _read_definition_secret("OPENCODE_ZEN_API_KEY")
+    if not token:
+        return None
+    try:
+        response = _fixed_provider_get(
+            "https://opencode.ai/zen/v1/models", token, host="opencode.ai", timeout=15.0,
+        )
+        payload = response.json() or {}
+        row = _zen_row(payload.get("data") if isinstance(payload, dict) else None)
+        return _mark_env_read(row, "OPENCODE_ZEN_API_KEY")
+    except Exception:
+        log.debug("OpenCode Zen direct env read failed", exc_info=True)
+        return None
 
 
 # Minimal protobuf/gRPC-web reader for grok.com’s subscription credit meter.
@@ -1116,9 +1476,9 @@ _GROK_PROXY = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 _GROK_SETTINGS = "https://cli-chat-proxy.grok.com/v1/settings"
 _GROK_BILLING_GRPC = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
 _GROK_UPGRADE_REASON = (
-    "Grok credits need a newer Hermes core with brokered xAI sign-in. This Hermes build does not "
-    "route xai-oauth through credentialed_provider_request; upgrade Hermes (core commit dbe0bcec "
-    "or a release containing it). The plugin keeps no token and has no legacy fallback."
+    "Grok subscription credits need a Hermes build that brokers xAI sign-in through "
+    "credentialed_provider_request. This build does not broker xAI, and the plugin never "
+    "reads the raw OAuth token. Manage the Grok plan at https://grok.com/dashboard."
 )
 
 
@@ -1366,13 +1726,30 @@ def _fetch_xai() -> dict[str, Any]:
 
 
 def _fetch_nous() -> dict[str, Any]:
-    # Core's read-only Nous fetcher owns the portal helper and refresh policy;
-    # the plugin no longer imports the private account module. Nous credits are
-    # account-global and the snapshot carries no provider raw body.
+    # Enhanced core exposes a Nous read-only fetcher. Stock 0.23.1 exposes the
+    # same account-usage builder (``build_nous_credits_snapshot``) without a
+    # ``fetch_account_usage`` entry; its portal helper is core-owned and the
+    # plugin never sees a token. Both routes return the same non-secret snapshot.
     snapshot = _core_usage("nous")
+    if snapshot is None:
+        snapshot = _stock_nous_snapshot()
     if snapshot is None:
         return _provider_unavailable("nous")
     return _serialize_snapshot(snapshot)
+
+
+def _stock_nous_snapshot() -> Any:
+    """Stock-compatible Nous snapshot through core's own builder, or None."""
+    builder = _core_helper("build_nous_credits_snapshot")
+    portal = _core_helper("_fetch_portal_account")
+    if builder is None or portal is None:
+        return None
+    try:
+        account_info = portal(10.0)
+        return builder(account_info)
+    except Exception:
+        log.debug("Nous stock portal snapshot unavailable", exc_info=True)
+        return None
 
 
 def _pretty_tokens(value: int) -> str:
@@ -1559,13 +1936,45 @@ def _apply_ollama_balance(row: dict[str, Any], payload: dict[str, Any]) -> None:
 
 
 def _fetch_ollama_cloud() -> dict[str, Any]:
-    # Core owns both ``/api/usage`` and ``/api/balance``; their decoded bodies
-    # ride on ``raw`` because the activity report and monthly allowance are not
-    # reconstructible from normalized windows.
+    # Enhanced core owns both ``/api/usage`` and ``/api/balance`` and returns
+    # their decoded bodies on ``raw``. Stock has no Ollama fetcher, so the
+    # profile's own OLLAMA_API_KEY may read the same fixed official endpoints.
     snapshot = _core_usage("ollama-cloud")
-    if snapshot is None or not isinstance(_snapshot_raw(snapshot).get("usage"), dict):
-        return _provider_unavailable("ollama-cloud")
-    return _serialize_snapshot(snapshot)
+    if snapshot is not None and isinstance(_snapshot_raw(snapshot).get("usage"), dict):
+        return _serialize_snapshot(snapshot)
+    direct = _direct_ollama_cloud()
+    if direct is not None:
+        return direct
+    if snapshot is not None:
+        return _serialize_snapshot(snapshot)
+    return _provider_unavailable("ollama-cloud")
+
+
+def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
+    token = _read_definition_secret("OLLAMA_API_KEY")
+    if not token:
+        return None
+    try:
+        usage_response = _fixed_provider_get(
+            "https://ollama.com/api/usage", token, host="ollama.com", timeout=15.0,
+        )
+        usage = usage_response.json() or {}
+        if not isinstance(usage, dict):
+            return None
+        row = _ollama_usage_row(usage)
+        try:
+            balance_response = _fixed_provider_get(
+                "https://ollama.com/api/balance", token, host="ollama.com", timeout=15.0,
+            )
+            balance = balance_response.json() or {}
+            if isinstance(balance, dict) and balance:
+                _apply_ollama_balance(row, balance)
+        except Exception:
+            log.debug("Ollama Cloud balance endpoint unavailable", exc_info=True)
+        return _mark_env_read(row, "OLLAMA_API_KEY")
+    except Exception:
+        log.debug("Ollama Cloud direct env read failed", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -3633,8 +4042,8 @@ def _config_provider_values(value: Any, found: list[str]) -> None:
 
 
 def _has_local_credentials(provider: str) -> bool:
-    """Presence only, from core's non-secret summary (never a credential store)."""
-    return bool(_credential_summary(provider).get("configured"))
+    """Presence only from core metadata or the profile secret scope, never a store."""
+    return _local_presence(provider)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -3675,13 +4084,16 @@ _ACCOUNT_USAGE_LOCK = threading.Lock()
 
 
 def _account_identities(provider: str) -> list[dict[str, Any]]:
-    """Non-secret pooled accounts for *provider*, deduped by core identity id."""
-    if not _core_seam_available():
+    """Non-secret pooled accounts for *provider*, deduped by core identity id.
+
+    Stock 0.23.1 has no identity inventory; the row then carries no ``accounts``
+    metadata and the footer shows the account as unknown instead of guessing.
+    """
+    list_identities = _core_helper("list_account_usage_identities")
+    if list_identities is None:
         return []
     try:
-        from agent.account_usage import list_account_usage_identities
-
-        rows = list_account_usage_identities(provider) or []
+        rows = list_identities(provider) or []
     except Exception:
         log.debug("provider-usage account identities unavailable for %s", provider, exc_info=True)
         return []
@@ -3732,7 +4144,23 @@ def _account_usage_row(provider: str, identity_id: str) -> Optional[dict[str, An
             if cached is not None and now - cached[0] < _ACCOUNT_USAGE_TTL_SECS:
                 return copy.deepcopy(cached[1])
         snapshot = _core_usage(provider, identity_id=wanted)
-        row = _serialize_snapshot(snapshot) if snapshot is not None else None
+        if snapshot is None:
+            # A missing per-identity snapshot is a negative cache entry; it is
+            # never retried as a provider-wide read.
+            with _ACCOUNT_USAGE_LOCK:
+                _ACCOUNT_USAGE_CACHE[key] = (time.monotonic(), None)
+                if len(_ACCOUNT_USAGE_CACHE) > _ACCOUNT_USAGE_MAX_ENTRIES:
+                    oldest = min(_ACCOUNT_USAGE_CACHE, key=lambda item: _ACCOUNT_USAGE_CACHE[item][0])
+                    _ACCOUNT_USAGE_CACHE.pop(oldest, None)
+            return None
+        row = _serialize_snapshot(snapshot)
+        verified = _verified_row_identity(row)
+        if not verified or verified != wanted:
+            # A missing or different identity cannot be attributed to the
+            # requested account. Return unknown rather than borrowing a
+            # provider-wide or another login's figures.
+            log.debug("provider-usage account read for %s did not prove identity %s", provider, wanted)
+            return None
         with _ACCOUNT_USAGE_LOCK:
             _ACCOUNT_USAGE_CACHE[key] = (time.monotonic(), row)
             if len(_ACCOUNT_USAGE_CACHE) > _ACCOUNT_USAGE_MAX_ENTRIES:
@@ -3753,8 +4181,10 @@ def _account_row_fields(row: dict[str, Any]) -> dict[str, Any]:
 def _verified_row_identity(row: dict[str, Any]) -> str:
     """The account id a usage snapshot proved it was fetched for, else ``""``.
 
-    Core stamps ``identity_id``/``account_id`` only on a per-identity read; a
-    provider-wide (env/singleton) snapshot stays unset rather than guessing.
+    Core stamps ``identity_id``/``account_id`` from the snapshot it fetched; a
+    stock snapshot's decoded ``identity`` is mapped onto ``identity_id``. A
+    provider-wide snapshot with no decoded identity stays unset rather than
+    guessing.
     """
     for key in ("identity_id", "account_id"):
         value = str(row.get(key) or "").strip()
@@ -3772,7 +4202,8 @@ def _attach_accounts(provider: str, row: dict[str, Any]) -> dict[str, Any]:
     per-identity read instead, and providers without one (xAI, Nous credits)
     stay unknown. With two or more logins a provider-wide figure is ambiguous:
     entries carry only their own identity-scoped snapshot, and the flat row
-    identity stays unset.
+    keeps only the identity its own snapshot proved (if any), never a guessed
+    account.
     """
     accounts = _account_identities(provider)
     if not accounts:
@@ -3803,7 +4234,7 @@ def _attach_accounts(provider: str, row: dict[str, Any]) -> dict[str, Any]:
                     log.debug("provider-usage account read failed for %s", provider, exc_info=True)
                     usage = None
                 usage_identity = _verified_row_identity(usage) if usage else ""
-                if usage and (not usage_identity or usage_identity == identity_id):
+                if usage and usage_identity == identity_id:
                     entry.update(_account_row_fields(usage))
             # No exact fetch (xAI is brokered provider-wide; Nous credits are
             # account-global): the entry stays unknown rather than borrowing a
@@ -3819,7 +4250,7 @@ def _attach_accounts(provider: str, row: dict[str, Any]) -> dict[str, Any]:
                 log.debug("provider-usage account read failed for %s", provider, exc_info=True)
                 usage = None
             usage_identity = _verified_row_identity(usage) if usage else ""
-            if usage and (not usage_identity or usage_identity == str(account["identity_id"])):
+            if usage and usage_identity == str(account["identity_id"]):
                 entry.update(_account_row_fields(usage))
         entries.append(entry)
     row["accounts"] = entries
@@ -4491,6 +4922,193 @@ def _clean_profile(value: Any) -> Optional[str]:
     return text
 
 
+def _clean_reset_identity(value: Any) -> Optional[str]:
+    """Exact non-secret active-account id read from the stock snapshot."""
+    text = str(value or "").strip()
+    return text if text and len(text) <= 256 else None
+
+
+_RESET_SERVICE_MODULE: Optional[Any] = None
+_RESET_SERVICE_MODULE_LOCK = threading.Lock()
+_RESET_SERVICE_UNAVAILABLE = (
+    "Reset support is unavailable because this installed build is missing its reset service. "
+    "Nothing was spent."
+)
+
+
+def _reset_service_path() -> Path:
+    """Sibling module path; a small seam so a missing install is testable."""
+    return Path(__file__).with_name("reset_service.py")
+
+
+def _reset_service_module() -> Any:
+    """Load the sibling reset service by path, gracefully or return ``None``.
+
+    ``plugin_api.py`` is executed by a path spec without the ``dashboard``
+    directory on ``sys.path``; a plain ``import reset_service`` would fail in
+    the real host.  Caching one module keeps the short-lived confirmation store
+    shared across requests in this backend process.  An installed build that
+    omitted the optional reset module degrades to an honest unavailable
+    response instead of a 500 on every reset route.
+    """
+    global _RESET_SERVICE_MODULE
+    if _RESET_SERVICE_MODULE is not None:
+        return _RESET_SERVICE_MODULE
+    with _RESET_SERVICE_MODULE_LOCK:
+        if _RESET_SERVICE_MODULE is None:
+            path = _reset_service_path()
+            module_name = "hermes_dashboard_provider_usage_reset_service"
+            try:
+                if not path.is_file():
+                    log.debug("provider-usage reset service is not installed at %s", path)
+                    return None
+                spec = importlib.util.spec_from_file_location(module_name, path)
+                if spec is None or spec.loader is None:
+                    log.debug("provider-usage reset service has no importable spec")
+                    return None
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                log.debug("provider-usage reset service could not be loaded", exc_info=True)
+                return None
+            _RESET_SERVICE_MODULE = module
+    return _RESET_SERVICE_MODULE
+
+
+class _UnavailableResetService:
+    """Honest no-op used when the optional reset module is not installed."""
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "ok": False, "state": "unavailable", "status": "unavailable",
+            "reason": "reset_service_unavailable", "message": _RESET_SERVICE_UNAVAILABLE,
+            "action_label": "Redeem one banked Codex reset (server-selected)",
+            "credit_consumed": "no", "credit_kind": "banked_reset", "purchased_credit_used": False,
+            "needs_reconcile": False, "readback_mismatch": False,
+            "summary": None, "confirmation": None, "readback": None,
+        }
+
+    def summary(self) -> dict[str, Any]:
+        return self._payload()
+
+    def preview(self) -> dict[str, Any]:
+        return self._payload()
+
+    def confirm(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return self._payload()
+
+    def readback(self) -> dict[str, Any]:
+        return self._payload()
+
+
+def _reset_session_id(request: Request, profile: Optional[str]) -> Optional[str]:
+    """Opaque server-derived session binding, never a body field or raw header.
+
+    Prefer a verified session on ``request.state``; otherwise use the dashboard
+    session-token header, or the stable local client tuple for stock Desktop.
+    Only a SHA-256 digest reaches the reset service/store.
+    """
+    values: list[str] = []
+    session = getattr(getattr(request, "state", None), "session", None)
+    if session is not None:
+        for key in ("sid", "session_id", "id", "sub", "email"):
+            value = session.get(key) if isinstance(session, dict) else getattr(session, key, None)
+            if value:
+                values.append(str(value))
+                break
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        token = headers.get("x-hermes-session-token")
+        if token:
+            values.append(str(token))
+        if not values:
+            client = getattr(request, "client", None)
+            host = str(getattr(client, "host", "") or "")
+            user_agent = str(headers.get("user-agent") or "")[:256]
+            if host or user_agent:
+                values.append(f"local-session:{_clean_profile(profile) or 'current'}:{host}:{user_agent}")
+    for value in values:
+        text = value.strip()
+        if text:
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return None
+
+
+def _reset_service_for(
+    request: Request,
+    profile: Optional[str],
+    identity_id: Optional[str],
+    *,
+    require_session: bool,
+) -> Any:
+    module = _reset_service_module()
+    if module is None:
+        return _UnavailableResetService()
+    try:
+        return module.ResetService(
+            profile=profile,
+            identity_id=identity_id,
+            session_id=_reset_session_id(request, profile) if require_session else None,
+        )
+    except Exception:
+        log.debug("provider-usage reset service could not be constructed", exc_info=True)
+        return _UnavailableResetService()
+
+
+@router.post("/reset/summary")
+def reset_summary(request: Request, payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    """Read-only banked-reset inventory for one exact account."""
+    body = payload if isinstance(payload, dict) else {}
+    return _reset_service_for(
+        request,
+        _clean_profile(body.get("profile")),
+        _clean_reset_identity(body.get("identity_id")),
+        require_session=False,
+    ).summary()
+
+
+@router.post("/reset/preview")
+def reset_preview(request: Request, payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    """Verify the active account and issue a short-lived confirmation token."""
+    body = payload if isinstance(payload, dict) else {}
+    return _reset_service_for(
+        request,
+        _clean_profile(body.get("profile")),
+        _clean_reset_identity(body.get("identity_id")),
+        require_session=True,
+    ).preview()
+
+
+@router.post("/reset/confirm")
+def reset_confirm(request: Request, payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    """Consume one preview and redeem at most one banked reset."""
+    body = payload if isinstance(payload, dict) else {}
+    return _reset_service_for(
+        request,
+        _clean_profile(body.get("profile")),
+        _clean_reset_identity(body.get("identity_id")),
+        require_session=True,
+    ).confirm(
+        str(body.get("token") or "").strip()[:512],
+        confirmed_account=_clean_reset_identity(body.get("confirmed_account")),
+        confirmed_intent=str(body.get("confirmed_intent") or "").strip()[:128],
+    )
+
+
+@router.post("/reset/readback")
+def reset_readback(request: Request, payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    """Read current quota and reset inventory after an uncertain result."""
+    body = payload if isinstance(payload, dict) else {}
+    return _reset_service_for(
+        request,
+        _clean_profile(body.get("profile")),
+        _clean_reset_identity(body.get("identity_id")),
+        require_session=False,
+    ).readback()
+
+
 @router.post("/overview")
 def overview(payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
@@ -4595,6 +5213,18 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
         row["label"] = item["label"]
         row["configured"] = bool(item.get("configured"))
         row["capability"] = item.get("capability", row.get("capability"))
+        if not row.get("manage_links") and definition is not None:
+            docs_url = _safe_https_url(definition.get("docs_url"))
+            if docs_url:
+                # A profile/bundled definition has no code-owned account map.
+                # Its validated HTTPS docs URL is the only external link this
+                # pane will show; never invent an account-management URL.
+                row["manage_links"] = [{
+                    "label": "Docs",
+                    "product": item["label"],
+                    "kind": "docs",
+                    "url": docs_url,
+                }]
         if not row.get("pricing"):
             row["pricing"] = _pricing_rows(provider, active_model)
         if row.get("peak") is None:

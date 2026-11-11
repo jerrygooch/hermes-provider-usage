@@ -9,10 +9,10 @@ Hermes credential routes, with the Desktop pane's field parity preserved.
   `C:/Users/jerry/AppData/Local/hermes/worktrees/provider-usage-core-seams`
   at `a4c484eb5d` (contains `622eb3219f` provider fetchers/identities and the
   cherry-picked `13152f4603` delegation metadata).
-- No release contains those commits. `plugin.yaml` therefore carries **no**
-  `requires_hermes` floor: a released floor would be false and a newer one would
-  be invented. Older hosts load the plugin and show an explicit upgrade-required
-  row; there is no raw-key fallback.
+- No release contained those commits when the migration was written; stock
+  `0.23.1` exposes the required read-only snapshot route, so `plugin.yaml`
+  floors at `>=0.23.1`. Enhanced identity/summary/broker helpers remain optional,
+  degrade one row, and are covered by `docs/stock-support.md`.
 - Nothing was installed into the daily Hermes home, published, or restarted.
 
 ## Routes now used
@@ -100,8 +100,8 @@ Rules enforced by tests and code:
    account.
 3. Two or more accounts: per-identity usage is read with the **exact**
    `fetch_account_usage(provider, read_only=True, identity_id=…)`. The
-   provider-wide value is never copied onto an entry and the flat row identity
-   stays unset.
+   provider-wide value is never copied onto an entry. The flat row keeps only
+   the identity its own snapshot proved, never a guessed account.
 4. A missing identity returns unknown and is negatively cached; it is never
    retried as a provider-wide read.
 5. Per-account reads are TTL-cached (60 s), deduped per `(provider, identity,
@@ -155,15 +155,17 @@ with `HERMES_PU_ACCEPT_MIGRATION=1` they must run with **no skips**.
   matches; otherwise the entry gets an exact identity read where core supports
   one (xAI/Nous stay unknown) and the flat row is never stamped with an
   unproven account.
-- An OpenRouter/DeepSeek/Ollama snapshot without its required raw body becomes an
-  explicit unavailable row; a core without the public helpers becomes an
-  upgrade-required row. Neither falls back to a raw credential.
+- A core build without the read-only route becomes an explicit unavailable row.
+  A stock core without the optional raw bodies falls back to the provider's own
+  profile env key at its fixed official origin (or to the normalized snapshot);
+  it never falls back to a raw OAuth token or credential store. See
+  `docs/stock-support.md`.
 
 ## Remaining gaps / non-goals
 
-- No Hermes release contains the required core commits; there is no truthful
-  release floor. This is documented in `plugin.yaml`, not hidden behind
-  `>=0.21.6`.
+- No Hermes release contained the required core commits at migration time; stock
+  `0.23.1` now provides the read-only snapshot baseline, and the optional
+  enhanced helpers are documented in `docs/stock-support.md`.
 - xAI per-account usage is still provider-level (the broker route is
   provider-scoped); the footer correctly shows `—` for an ambiguous multi-account
   row.
@@ -189,7 +191,7 @@ All in `tests/test_credential_migration_parity.py` unless noted.
 | T5 | `AnthropicParityTests::test_unavailable_snapshot_reason_is_preserved` |
 | T6 | `OpenRouterParityTests::test_credits_key_quota_free_quota_and_key_usage` |
 | T7 | `OpenRouterParityTests::test_credits_only_response_still_reports_a_balance` |
-| T7b | `OpenRouterParityTests::test_core_snapshot_without_the_raw_body_is_an_upgrade_row` |
+| T7b | `OpenRouterParityTests::test_core_snapshot_without_raw_keeps_normalized_snapshot` |
 | T7c | `OpenRouterParityTests::test_old_core_without_the_seam_reports_upgrade_not_a_raw_fallback` |
 | T8 | `DeepSeekParityTests::test_multi_currency_balances_keep_components_and_currency` |
 | T9 | `DeepSeekParityTests::test_unavailable_account_keeps_the_reason` |

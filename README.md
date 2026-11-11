@@ -147,7 +147,7 @@ mkdir -p "$HERMES_HOME/desktop-plugins/provider-usage"
 cp desktop/plugin.js "$HERMES_HOME/desktop-plugins/provider-usage/plugin.js"
 
 mkdir -p "$HERMES_HOME/plugins/provider-usage/dashboard"
-cp dashboard/plugin_api.py dashboard/manifest.json \
+cp dashboard/plugin_api.py dashboard/reset_service.py dashboard/manifest.json \
   "$HERMES_HOME/plugins/provider-usage/dashboard/"
 cp -R dashboard/definitions "$HERMES_HOME/plugins/provider-usage/dashboard/"
 cp -R dashboard/dist "$HERMES_HOME/plugins/provider-usage/dashboard/"

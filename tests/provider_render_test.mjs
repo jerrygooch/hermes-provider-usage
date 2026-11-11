@@ -661,6 +661,54 @@ check('copied connection setup names the environment key', copiedConnection, 'GE
 check('copied connection setup names the official destination', copiedConnection, 'https://ai.google.dev/gemini-api/docs/api-key')
 nocheck('copied connection setup contains no credential value', copiedConnection, 'sk-')
 
+// Banked-reset counts: an absent provider count is unknown, not zero. An
+// explicit numeric 0 is a real reading and must stay 0.
+function codexResetFixture(reset_credits) {
+  return {
+    version: 1,
+    fetched_at: '2026-11-11T02:03:07Z',
+    account_profile: 'default',
+    active: { provider: 'openai-codex', model: 'gpt-5.2-codex' },
+    default_provider: 'openai-codex',
+    providers: [{
+      id: 'openai-codex',
+      label: 'OpenAI Codex',
+      available: true,
+      plan: 'Pro',
+      limits: [{ id: 'default', label: 'Codex', windows: [{ label: 'Weekly', remaining_percent: 40 }] }],
+      balances: [],
+      details: [],
+      reset_credits
+    }]
+  }
+}
+
+world.profile = 'default'
+world.connectionId = 'local'
+world.focusedOwner = null
+world.focusedProfile = ''
+world.gateway = 'open'
+seedProvider('default', 'openai-codex')
+
+queryResult = {
+  data: codexResetFixture({ available: null, applicable: null }),
+  isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {}
+}
+const missingResetCounts = renderPage()
+check('absent banked reset counts say not reported', missingResetCounts,
+  'Banked resets: not reported saved, not reported usable now')
+nocheck('absent banked reset counts never become zero', missingResetCounts, 'Banked resets: 0 saved')
+
+queryResult = {
+  data: codexResetFixture({ available: 0, applicable: 0 }),
+  isLoading: false, isError: false, isFetching: false, error: null, refetch: () => {}
+}
+const zeroResetCounts = renderPage()
+check('explicit zero banked reset counts stay zero', zeroResetCounts,
+  'Banked resets: 0 saved, 0 usable now')
+nocheck('explicit zero is not replaced by not reported', zeroResetCounts,
+  'Banked resets: not reported saved')
+
 if (failures > 0) {
   throw new Error(`${failures} render assertion(s) failed`)
 }

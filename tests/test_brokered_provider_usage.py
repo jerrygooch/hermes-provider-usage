@@ -245,8 +245,8 @@ class XaiBrokerMigrationTests(unittest.TestCase):
                                "No signed-in requests for provider 'xai-oauth' (supported: openai-codex)")):
             row = backend._fetch_xai()
         self.assertFalse(row["available"])
-        self.assertIn("newer Hermes core", row["unavailable_reason"])
-        self.assertIn("no legacy fallback", row["unavailable_reason"])
+        self.assertIn("does not broker xAI", row["unavailable_reason"])
+        self.assertIn("never reads the raw OAuth token", row["unavailable_reason"])
 
     def test_legacy_helper_signature_reports_upgrade_without_bytes_argument(self):
         calls = []
@@ -263,14 +263,14 @@ class XaiBrokerMigrationTests(unittest.TestCase):
                     "POST", backend._GROK_BILLING_GRPC, content=b"\x00\x00\x00\x00\x00")
 
         self.assertFalse(row["available"])
-        self.assertIn("newer Hermes core", row["unavailable_reason"])
+        self.assertIn("does not broker xAI", row["unavailable_reason"])
         self.assertEqual(len(calls), 1)  # the proxy GET never passed content=
 
     def test_missing_broker_module_reports_upgrade(self):
         with mock.patch.dict(sys.modules, {"hermes_cli.plugin_provider_requests": None}):
             row = backend._fetch_xai()
         self.assertFalse(row["available"])
-        self.assertIn("newer Hermes core", row["unavailable_reason"])
+        self.assertIn("does not broker xAI", row["unavailable_reason"])
         self.assertNotIn(SECRET, json.dumps(row))
 
 

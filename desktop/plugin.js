@@ -1681,7 +1681,7 @@ function AllProviderMetrics({ row, complete = false }) {
       row?.reset_credits
         ? jsx('span', {
             style: { ...textSecondary, fontSize: 11, lineHeight: 1.45, fontVariantNumeric: 'tabular-nums' },
-            children: `Banked resets: ${row.reset_credits.available ?? 0} saved, ${row.reset_credits.applicable ?? 0} usable now`
+            children: `Banked resets: ${bankedResetCount(row.reset_credits.available)} saved, ${bankedResetCount(row.reset_credits.applicable)} usable now`
           })
         : null,
       balances.length > 0
@@ -1707,7 +1707,244 @@ function AllProviderMetrics({ row, complete = false }) {
   })
 }
 
-function ActiveProvider({ row, model }) {
+const RESET_INTENT = 'redeem_one_banked_codex_reset'
+
+// A missing count is not zero. Keep an explicit numeric 0 as a real reading.
+function bankedResetCount(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : 'not reported'
+}
+
+function safeExternalUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''))
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) return ''
+    return parsed.toString()
+  } catch {
+    return ''
+  }
+}
+
+function ManageLinks({ links, ctx, label = 'Account' }) {
+  const items = (Array.isArray(links) ? links : [])
+    .map(link => ({ ...link, url: safeExternalUrl(link?.url) }))
+    .filter(link => link.url)
+  if (items.length === 0) return null
+  const open = (event, url) => {
+    haptic('tap')
+    if (ctx?.os?.openExternal) {
+      event.preventDefault()
+      void ctx.os.openExternal(url)
+    }
+  }
+  return jsxs('div', {
+    style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 },
+    children: [
+      jsx('span', {
+        style: { ...textSecondary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em' },
+        children: label
+      }, 'label'),
+      ...items.map((link, index) => jsx('a', {
+        href: link.url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        title: link.product ? `${link.label || 'Manage account'} — ${link.product}` : (link.label || 'Manage account'),
+        'aria-label': link.product ? `${link.label || 'Manage account'} — ${link.product}` : (link.label || 'Manage account'),
+        onClick: event => open(event, link.url),
+        style: {
+          color: 'var(--ui-accent)',
+          fontSize: 10.5,
+          lineHeight: 1.45,
+          textDecoration: 'none',
+          whiteSpace: 'nowrap'
+        },
+        children: link.label || 'Manage account'
+      }, `manage-${index}`))
+    ]
+  })
+}
+
+function resetStateMeta(summary) {
+  const state = String(summary?.state || '').toLowerCase()
+  if (state === 'ready') return { label: 'Resets available', variant: 'success' }
+  if (state === 'no_banked_resets') return { label: 'None banked', variant: 'outline' }
+  if (state === 'not_applicable' || state === 'not_exhausted') return { label: 'Not redeemable now', variant: 'warn' }
+  if (state === 'count_unknown') return { label: 'Count unavailable', variant: 'warn' }
+  if (state === 'account_unverified') return { label: 'Account unverified', variant: 'warn' }
+  if (state === 'account_changed') return { label: 'Account changed', variant: 'warn' }
+  if (state === 'reset_unsupported') return { label: 'Reset unavailable', variant: 'muted' }
+  return { label: 'Unavailable', variant: 'muted' }
+}
+
+// Reset is a separately gated account mutation, not a refresh. It is rendered
+// only for Codex rows with a verified account identity; the two-step preview /
+// confirm flow is the only path to core's banked-reset operation.
+function CodexResetPanel({ row, ctx, profile }) {
+  const [summary, setSummary] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [result, setResult] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const clickLock = useRef(false)
+
+  useEffect(() => {
+    setSummary(null)
+    setPreview(null)
+    setResult(null)
+    setError('')
+  }, [row?.id])
+
+  if (!ctx?.rest) return null
+
+  const call = async (path, body) => {
+    if (clickLock.current) return null
+    clickLock.current = true
+    setBusy(true)
+    setError('')
+    try {
+      return await ctx.rest(path, { method: 'POST', body, timeoutMs: 45_000 })
+    } catch (err) {
+      setError(String(err?.message || err || 'Reset request failed.'))
+      return null
+    } finally {
+      clickLock.current = false
+      setBusy(false)
+    }
+  }
+  const check = async () => {
+    const data = await call('/reset/summary', { profile: profile || '' })
+    if (data) {
+      setSummary(data)
+      setPreview(null)
+      setResult(null)
+    }
+  }
+  const startPreview = async () => {
+    const identity = String(summary?.identity_id || '').trim()
+    if (!identity) return
+    const data = await call('/reset/preview', { profile: profile || '', identity_id: identity })
+    if (data) {
+      setPreview(data)
+      setSummary(data.summary || summary)
+      setResult(null)
+    }
+  }
+  const confirmReset = async () => {
+    const confirmation = preview?.confirmation
+    if (!confirmation || clickLock.current) return
+    const data = await call('/reset/confirm', {
+      profile: profile || '',
+      identity_id: confirmation.identity_id,
+      token: confirmation.token,
+      confirmed_account: confirmation.identity_id,
+      confirmed_intent: RESET_INTENT
+    })
+    if (data) {
+      setResult(data)
+      setPreview(null)
+      setSummary(null)
+    }
+  }
+  const recheck = async () => {
+    const identity = String(result?.identity_id || summary?.identity_id || '').trim()
+    const body = { profile: profile || '' }
+    if (identity) body.identity_id = identity
+    const data = await call('/reset/readback', body)
+    if (data) setResult(previous => ({ ...(previous || {}), readback: data, needs_reconcile: !data.ok }))
+  }
+
+  const state = summary ? resetStateMeta(summary) : null
+  const identity = String(summary?.identity_id || '').trim()
+  return jsxs('section', {
+    'aria-label': 'Codex banked reset credits',
+    style: { border: HAIRLINE, borderRadius: 8, padding: '9px 11px', display: 'grid', gap: 6, marginTop: 10, minWidth: 0 },
+    children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+        children: [
+          jsx('span', { style: { ...textPrimary, fontSize: 10.5, fontWeight: 600 }, children: 'Banked reset credits' }, 'title'),
+          state ? jsx(Badge, { variant: state.variant, size: 'xs', style: state.variant === 'outline' || state.variant === 'muted' ? { color: 'var(--ui-text-secondary)' } : undefined, children: state.label }, 'state') : null
+        ]
+      }),
+      jsx('span', {
+        style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 },
+        children: 'Redeems only the active Codex account Hermes is signed in to. This never purchases or spends paid API credits.'
+      }, 'note'),
+      identity
+        ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: `Active account: ${summary?.account_label || identity}` }, 'account')
+        : null,
+      summary
+        ? jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.5 }, children: summary.message }, 'summary')
+        : null,
+      summary?.inventory_detail
+        ? jsx('span', { style: { ...textSecondary, fontSize: 9, lineHeight: 1.4 }, children: summary.inventory_detail }, 'inventory-detail')
+        : null,
+      summary?.entries?.length
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 2 },
+            children: [
+              jsx('span', { style: { ...textSecondary, fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Provider-reported reset inventory' }, 'inventory-title'),
+              ...summary.entries.slice(0, 4).map((entry, index) => jsx('span', {
+                style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.4, overflowWrap: 'anywhere' },
+                children: `${entry.title || entry.reset_type || 'Banked reset'} · ${entry.status || 'status not reported'} · ${entry.expires_at ? `expires ${entry.expires_at}` : 'No expiry reported'}`
+              }, `reset-entry-${index}`)),
+              summary.entries.length > 4
+                ? jsx('span', { style: { ...textSecondary, fontSize: 9 }, children: `+${summary.entries.length - 4} more reported credit rows` }, 'inventory-more')
+                : null
+            ]
+          }, 'inventory')
+        : null,
+      summary && summary.state === 'ready' && summary.reset_executable && !preview
+        ? jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', disabled: busy || !identity, onClick: () => void startPreview(), children: 'Preview reset' }, 'preview')
+        : null,
+      !summary && !preview && !result
+        ? jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', disabled: busy, onClick: () => void check(), children: 'Check reset credits' }, 'check')
+        : null,
+      preview && !preview.confirmation
+        ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: preview.message || 'Reset preview did not produce a confirmation. Nothing was spent.' }, 'preview-refused')
+        : null,
+      preview?.confirmation
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 6, paddingTop: 7, borderTop: HAIRLINE },
+            children: [
+              jsx('span', { style: { ...textPrimary, fontSize: 10.5, fontWeight: 550, overflowWrap: 'anywhere' }, children: `Confirm ${preview.confirmation.account_label || preview.confirmation.identity_id}` }, 'confirm-account'),
+              jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: `${preview.confirmation.available_count} banked; ${preview.confirmation.applicable_count == null ? 'unknown' : preview.confirmation.applicable_count} usable now. The server selects the reset credit.` }, 'confirm-counts'),
+              jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: 'This spends one banked reset, not a purchase or paid API credit. It is single-use and expires shortly.' }, 'confirm-note'),
+              jsxs('div', {
+                style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+                children: [
+                  jsx(Button, { type: 'button', size: 'xs', disabled: busy, onClick: () => void confirmReset(), children: `Confirm reset on ${preview.confirmation.account_label || preview.confirmation.identity_id}` }, 'confirm'),
+                  jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', disabled: busy, onClick: () => setPreview(null), children: 'Cancel' }, 'cancel')
+                ]
+              })
+            ]
+          }, 'confirmation')
+        : null,
+      result
+        ? jsxs('div', {
+            style: { display: 'grid', gap: 5, paddingTop: 7, borderTop: HAIRLINE },
+            children: [
+              jsx('span', {
+                style: { ...textSecondary, fontSize: 10, lineHeight: 1.5, color: result.ok ? 'var(--ui-text-primary)' : 'var(--ui-text-secondary)' },
+                children: result.message
+              }, 'result'),
+              jsxs('div', {
+                style: { display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+                children: [
+                  jsx(Button, { type: 'button', variant: 'secondary', size: 'xs', disabled: busy, onClick: () => void recheck(), children: 'Re-check account' }, 'recheck'),
+                  jsx('span', { style: { ...textSecondary, fontSize: 9 }, children: result.credit_consumed === 'unknown' ? 'Do not retry before re-checking.' : result.credit_consumed === 'yes' ? 'One banked reset recorded.' : 'Nothing spent.' }, 'consumed')
+                ]
+              })
+            ]
+          }, 'result')
+        : null,
+      error
+        ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, color: 'var(--dt-destructive)' }, children: error }, 'error')
+        : null
+    ]
+  })
+}
+
+function ActiveProvider({ row, model, ctx, profile }) {
   const state = fundingState(row, model)
   const plan = row?.plan || (state.kind === 'balance' ? 'API credits' : 'Account usage')
   const codexFallback = row?.id === 'openai-codex' && state.kind === 'balance' && state.fallback
@@ -1772,6 +2009,10 @@ function ActiveProvider({ row, model }) {
             : null
         ]
       }),
+      jsx(ManageLinks, { links: row?.manage_links, ctx }, 'manage'),
+      row?.id === 'openai-codex'
+        ? jsx(CodexResetPanel, { row, ctx, profile }, 'codex-reset')
+        : null,
       jsxs('div', {
         style: { display: 'grid', gap: 10, marginTop: 17 },
         children: [
@@ -1783,7 +2024,7 @@ function ActiveProvider({ row, model }) {
   })
 }
 
-function ProviderDisclosure({ row }) {
+function ProviderDisclosure({ row, ctx, profile }) {
   const [open, setOpen] = useState(false)
   const summary = compactFundingSummary(row, '')
   return jsxs('div', {
@@ -1831,6 +2072,10 @@ function ProviderDisclosure({ row }) {
           ]
         })
       }),
+      jsx('div', { style: { padding: '0 13px 8px' }, children: jsx(ManageLinks, { links: row?.manage_links, ctx }) }, 'manage'),
+      row?.id === 'openai-codex'
+        ? jsx('div', { style: { padding: '0 13px 10px' }, children: jsx(CodexResetPanel, { row, ctx, profile }) }, 'codex-reset')
+        : null,
       open
         ? jsx('div', { style: { padding: '0 13px 13px' }, children: jsx(AllProviderMetrics, { row }) })
         : null
@@ -2451,7 +2696,7 @@ function connectionSetupText(entry) {
   ].filter(Boolean).join('\n')
 }
 
-function ConnectionCard({ entry }) {
+function ConnectionCard({ entry, ctx }) {
   const state = connectionStateMeta(entry)
   const scopes = Array.isArray(entry?.scopes) ? entry.scopes : []
   const setup = entry?.setup || {}
@@ -2485,6 +2730,7 @@ function ConnectionCard({ entry }) {
         ? jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: entry.description }, 'description')
         : null,
       jsx('span', { style: { ...textSecondary, fontSize: 10.5, lineHeight: 1.5 }, children: entry?.state_detail || '' }, 'state-detail'),
+      jsx(ManageLinks, { links: entry?.manage_links, ctx }, 'manage'),
       scopes.length > 0
         ? jsxs('div', {
             style: { display: 'grid', gap: 6, paddingTop: 8, borderTop: HAIRLINE },
@@ -2556,7 +2802,7 @@ function ConnectionCard({ entry }) {
   })
 }
 
-function ConnectionCardsSection({ connections }) {
+function ConnectionCardsSection({ connections, ctx }) {
   if (!Array.isArray(connections) || connections.length === 0) return null
   const connected = connections.filter(entry => String(entry?.state || '').toLowerCase() === 'connected').length
   return jsxs('section', {
@@ -2573,7 +2819,7 @@ function ConnectionCardsSection({ connections }) {
       }, 'intro'),
       jsx('div', {
         style: { display: 'grid', gap: 8, paddingTop: 10 },
-        children: connections.map(entry => jsx(ConnectionCard, { entry }, entry.id))
+        children: connections.map(entry => jsx(ConnectionCard, { entry, ctx }, entry.id))
       }, 'cards')
     ]
   })
@@ -2783,7 +3029,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
       children: [
         staleBanner,
         selected
-          ? jsx(ActiveProvider, { row: selected, model }, 'active')
+          ? jsx(ActiveProvider, { row: selected, model, ctx, profile: scope.fetchProfile }, 'active')
           : null,
         jsxs('section', {
           'aria-labelledby': 'provider-usage-accounts-heading',
@@ -2797,7 +3043,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
               ]
             }, 'accounts-header'),
             available.length > 0
-              ? jsx('div', { style: { display: 'grid', gap: 8 }, children: available.map(row => jsx(ProviderDisclosure, { row }, row.id)) }, 'account-cards')
+              ? jsx('div', { style: { display: 'grid', gap: 8 }, children: available.map(row => jsx(ProviderDisclosure, { row, ctx, profile: scope.fetchProfile }, row.id)) }, 'account-cards')
               : jsx('div', { style: { ...textSecondary, fontSize: 11, padding: '10px 0' }, children: 'No other providers are reporting usage.' }, 'empty-accounts'),
             jsx(LimitedProviders, { rows: limited }, 'limited'),
             jsx('footer', {
@@ -2806,7 +3052,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
             }, 'footer')
           ]
         }, 'accounts'),
-        jsx(ConnectionCardsSection, { connections: matched?.connections }, 'connections'),
+        jsx(ConnectionCardsSection, { connections: matched?.connections, ctx }, 'connections'),
         jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog')
       ]
     })

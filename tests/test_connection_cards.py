@@ -96,9 +96,21 @@ class ConnectionCardTests(unittest.TestCase):
         anthropic = cards[0]
         self.assertEqual(anthropic["state"], "connected_no_usage")
         self.assertEqual(anthropic["credential_source"], "env")
-        self.assertEqual(anthropic["scopes"][0]["state"], "not_connected")
-        self.assertIn("inference-only", anthropic["scopes"][0]["state_detail"])
+        self.assertEqual(anthropic["scopes"][0]["state"], "unverified")
+        self.assertIn("neither proves nor disproves", anthropic["scopes"][0]["state_detail"])
+        self.assertNotEqual(anthropic["scopes"][0]["state"], "not_connected")
         self.assertEqual(anthropic["scopes"][1]["state"], "needs_permission")
+
+    def test_pool_anthropic_without_oauth_metadata_is_unverified(self):
+        with mock.patch.object(backend, "_core_seam_available", return_value=True), \
+             mock.patch.object(backend, "_credential_summary", return_value=summary(True, "pool")), \
+             mock.patch.object(backend, "_account_identities", return_value=[]):
+            cards = backend._connection_cards()
+
+        anthropic = cards[0]
+        self.assertEqual(anthropic["scopes"][0]["state"], "unverified")
+        self.assertNotEqual(anthropic["scopes"][0]["state"], "not_connected")
+        self.assertIn("neither proves nor disproves", anthropic["scopes"][0]["state_detail"])
 
     def test_oauth_anthropic_reads_as_a_subscription_connection(self):
         with mock.patch.object(backend, "_core_seam_available", return_value=True), \

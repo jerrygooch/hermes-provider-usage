@@ -55,6 +55,11 @@ BACKEND_PATH = ROOT / "dashboard" / "plugin_api.py"
 # and from every error string; nothing here is a real key.
 SECRET = "sk-synthetic-parity-0000000000000000"
 MIGRATION_ACCEPTANCE = os.environ.get("HERMES_PU_ACCEPT_MIGRATION") == "1"
+try:
+    from agent import account_usage as _core_usage_module
+    STOCK_CORE = not hasattr(_core_usage_module, "provider_credential_summary")
+except Exception:
+    STOCK_CORE = True
 
 
 def load_backend():
@@ -88,27 +93,31 @@ def snapshot(provider, *, title="Account limits", source="usage_api", plan=None,
              raw=None, fetched_at=None, identity_id=None, account_id=None,
              profile_scope=None):
     """Build a real core ``AccountUsageSnapshot`` without importing core eagerly."""
+    import inspect
+
     from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
 
     parsed = tuple(
         item if isinstance(item, AccountUsageWindow) else AccountUsageWindow(**item)
         for item in windows
     )
-    return AccountUsageSnapshot(
-        provider=provider,
-        source=source,
-        fetched_at=fetched_at or now(),
-        title=title,
-        plan=plan,
-        windows=parsed,
-        details=tuple(details),
-        unavailable_reason=unavailable_reason,
-        identity=identity,
-        raw=raw,
-        identity_id=identity_id,
-        account_id=account_id,
-        profile_scope=profile_scope,
-    )
+    values = {
+        "provider": provider,
+        "source": source,
+        "fetched_at": fetched_at or now(),
+        "title": title,
+        "plan": plan,
+        "windows": parsed,
+        "details": tuple(details),
+        "unavailable_reason": unavailable_reason,
+        "identity": identity,
+        "raw": raw,
+        "identity_id": identity_id,
+        "account_id": account_id,
+        "profile_scope": profile_scope,
+    }
+    supported = inspect.signature(AccountUsageSnapshot).parameters
+    return AccountUsageSnapshot(**{key: value for key, value in values.items() if key in supported})
 
 
 @contextlib.contextmanager
@@ -408,7 +417,9 @@ class CodexParityTests(ParityCase):
             "approx_local_messages": [10, 20],
             "approx_cloud_messages": [1, 2],
         })
-        self.assertEqual(row["reset_credits"], {"available": 3, "applicable": 1})
+        self.assertEqual(row["reset_credits"]["available"], 3)
+        self.assertEqual(row["reset_credits"]["applicable"], 1)
+        self.assertEqual(row["reset_credits"]["entries"], None)
         self.assertEqual([entry["model"] for entry in row["model_access"]],
                          ["Gpt 5.2 Codex", "GPT-5.1-Codex-Spark"])
         self.assertTrue(row["model_access"][1]["credits_would_enable"])
@@ -451,15 +462,17 @@ class CodexParityTests(ParityCase):
 
     def test_provider_failure_is_a_safe_error(self):
         with mock.patch("agent.account_usage.fetch_account_usage", return_value=None):
-            with self.assertRaises(RuntimeError) as caught:
-                backend._fetch_codex()
-        self.assertNotIn(SECRET, str(caught.exception))
+            row = backend._fetch_codex()
+        self.assertFalse(row["available"])
+        self.assertTrue("usage is unavailable" in row["unavailable_reason"]
+                        or "not configured" in row["unavailable_reason"])
+        self.assertNotIn(SECRET, json.dumps(row))
 
     def test_old_core_is_an_upgrade_row_not_a_typeerror(self):
         with mock.patch.object(backend, "_core_seam_available", return_value=False):
             row = backend._fetch_codex()
         self.assertFalse(row["available"])
-        self.assertIn("does not expose the read-only provider-usage core seam",
+        self.assertIn("does not expose the read-only provider-usage snapshot API",
                       row["unavailable_reason"])
 
 
@@ -536,19 +549,19 @@ class OpenRouterParityTests(ParityCase):
         self.assertEqual(row["limits"], [])
         self.assertIsNone(row["key_usage"])
 
-    def test_core_snapshot_without_the_raw_body_is_an_upgrade_row(self):
+    def test_core_snapshot_without_raw_keeps_normalized_snapshot(self):
         snap = snapshot(
             "openrouter", source="credits_api",
             windows=[{"label": "API key quota", "used_percent": 75.0}],
             details=("Credits balance: $12.50",), raw=None,
         )
         with mock_core_usage({"openrouter": snap}), \
-                mock.patch.object(backend, "_credential_summary",
-                                  return_value={"configured": True}):
+                mock.patch.object(backend, "_direct_openrouter", return_value=None):
             row = backend._fetch_openrouter()
         self.assert_ui_contract(row)
-        self.assertFalse(row["available"])
-        self.assertIn("usage is unavailable for this account", row["unavailable_reason"])
+        self.assertTrue(row["available"])
+        self.assertEqual(row["details"], ["Credits balance: $12.50"])
+        self.assertEqual(row["limits"][0]["windows"][0]["used_percent"], 75.0)
         self.assertEqual(row["balances"], [])
         self.assertIsNone(row["key_usage"])
 
@@ -556,7 +569,7 @@ class OpenRouterParityTests(ParityCase):
         with mock.patch.object(backend, "_core_seam_available", return_value=False):
             row = backend._fetch_openrouter()
         self.assertFalse(row["available"])
-        self.assertIn("does not expose the read-only provider-usage core seam",
+        self.assertIn("does not expose the read-only provider-usage snapshot API",
                       row["unavailable_reason"])
         self.assertIn("no raw-credential fallback", row["unavailable_reason"])
 
@@ -896,6 +909,7 @@ class InventoryParityTests(ParityCase):
         self.assertIsNone(backend._clean_profile("ACTIVE"))
         self.assertEqual(backend._clean_profile(" beta "), "beta")
 
+    @unittest.skipIf(STOCK_CORE, "enhanced core provides provider_credential_summary")
     def test_inventory_presence_comes_from_the_public_summary(self):
         def summary(provider):
             if provider == "deepseek":
@@ -912,6 +926,7 @@ class InventoryParityTests(ParityCase):
             self.assertFalse(backend._has_local_credentials("openrouter"))
         self.assertEqual([row["id"] for row in rows], ["deepseek"])
 
+    @unittest.skipIf(STOCK_CORE, "enhanced core provides list_account_usage_identities")
     def test_account_rows_dedupe_and_stay_bounded(self):
         entries = [
             {"identity_id": "fp:aaaaaaaaaaaaaaaa", "label": "A"},
@@ -1009,7 +1024,10 @@ class AccountAttributionParityTests(ParityCase):
     def test_multi_account_entries_get_only_their_own_usage(self):
         def usage(provider, identity_id):
             amount = 10.0 if identity_id == self.ID_A else 20.0
-            return self._row(amount=amount)
+            exact = self._row(amount=amount)
+            exact["identity_id"] = identity_id
+            exact["account_id"] = identity_id
+            return exact
 
         with mock.patch.object(backend, "_account_identities", return_value=[
             {"identity_id": self.ID_A, "label": "Account A"},
@@ -1053,15 +1071,69 @@ class AccountAttributionParityTests(ParityCase):
             ("openrouter", {"read_only": True, "identity_id": self.ID_A}),
         ], "a missing identity must be a negative cache entry, never a provider-wide read")
 
+    def test_exact_identity_read_rejects_a_missing_or_different_snapshot_identity(self):
+        def fetch_with(identity):
+            def fake_fetch(provider, **kwargs):
+                return snapshot("openrouter", identity=identity, source="credits_api", raw={
+                    "credits": {"total_credits": 10.0, "total_usage": 1.0}, "key": {},
+                })
+            return fake_fetch
+
+        backend._clear_account_caches()
+        with mock.patch("agent.account_usage.fetch_account_usage",
+                        side_effect=fetch_with(None)):
+            self.assertIsNone(backend._account_usage_row("openrouter", self.ID_A))
+
+        backend._clear_account_caches()
+        with mock.patch("agent.account_usage.fetch_account_usage",
+                        side_effect=fetch_with(self.ID_B)):
+            self.assertIsNone(backend._account_usage_row("openrouter", self.ID_A),
+                              "a different account's figures must never attach to the requested id")
+
+        backend._clear_account_caches()
+        with mock.patch("agent.account_usage.fetch_account_usage",
+                        side_effect=fetch_with(self.ID_A)):
+            row = backend._account_usage_row("openrouter", self.ID_A)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["identity_id"], self.ID_A)
+
+    def test_stamp_snapshot_maps_stock_identity_to_the_identity_id(self):
+        row = backend._serialize_snapshot(snapshot(
+            "openrouter", identity=self.ID_A, source="credits_api",
+            raw={"credits": {"total_credits": 10.0, "total_usage": 1.0}, "key": {}},
+        ))
+        self.assertEqual(row.get("identity_id"), self.ID_A)
+
+    def test_attach_accounts_never_assigns_usage_from_an_unproven_identity(self):
+        def fake_usage(provider, identity_id):
+            unproven = self._row(amount=7.0)
+            unproven["identity_id"] = self.ID_B
+            return unproven
+
+        with mock.patch.object(backend, "_account_identities", return_value=[
+            {"identity_id": self.ID_A, "label": "Account A"},
+        ]), mock.patch.object(backend, "_account_usage_row", side_effect=fake_usage):
+            row = backend._attach_accounts("openrouter", self._row(amount=99.0))
+
+        entry = row["accounts"][0]
+        self.assertEqual(entry["identity_id"], self.ID_A)
+        self.assertNotIn("limits", entry)
+        self.assertNotIn("balances", entry)
+        self.assertNotIn("fetched_at", entry)
+        self.assertNotIn("identity_id", row)
+
     def test_account_usage_cache_dedupes_expires_and_stays_bounded(self):
         calls = []
-        snap = snapshot("openrouter", source="credits_api", raw={
-            "credits": {"total_credits": 10.0, "total_usage": 1.0}, "key": {},
-        })
+
+        def snap_for(identity):
+            return snapshot("openrouter", identity=identity, source="credits_api", raw={
+                "credits": {"total_credits": 10.0, "total_usage": 1.0}, "key": {},
+            })
 
         def fake_fetch(provider, **kwargs):
-            calls.append((provider, kwargs.get("identity_id")))
-            return snap
+            identity = kwargs.get("identity_id")
+            calls.append((provider, identity))
+            return snap_for(identity)
 
         with mock.patch("agent.account_usage.fetch_account_usage", side_effect=fake_fetch):
             with mock.patch.object(backend, "_ACCOUNT_USAGE_TTL_SECS", 60.0):
@@ -1327,6 +1399,7 @@ class CurrentNarrowingProbes(ParityCase):
                          ["API key quota"])
         self.assertFalse(any(group["label"] == "Free models" for group in row["limits"]))
 
+    @unittest.skipIf(STOCK_CORE, "stock core has no identity_id snapshot field")
     def test_snapshot_serializer_preserves_account_identity_and_window_scope(self):
         snap = snapshot(
             "openai-codex",

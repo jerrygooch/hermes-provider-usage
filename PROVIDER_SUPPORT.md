@@ -112,39 +112,44 @@ Definitions cannot express OAuth refresh, multi-step requests, writes, HTML scra
 
 Approval is a local consent record, not a sandbox. Code running as the same OS user can edit the definition and the approval manifest, and can read the profile's credentials directly. The gate prevents an unreviewed definition that arrives from a pack, update, or another tool from using profile secrets without a human seeing its destination and credential references. It does not protect against malicious same-user code or a compromised Hermes process.
 
-### Built-in adapter credential routes (post-migration)
+### Built-in adapter credential routes (stock + enhanced)
 
-Every built-in adapter now reads through a sanctioned public route; none reads a
-runtime key, credential store, or private auth module.
+Stock Hermes 0.23.1 is the supported baseline. Every built-in adapter reads
+through a sanctioned public route; none reads a runtime key, credential store,
+or private auth module.
 
-- **Core read-only snapshots:** OpenAI Codex, Anthropic, OpenRouter, DeepSeek,
-  Ollama Cloud, OpenCode Zen, OpenCode Go, and Nous call
-  `agent.account_usage.fetch_account_usage(provider, read_only=True)`. The
-  provider bodies the pane needs (OpenRouter credits/key, DeepSeek balances,
-  Ollama usage/balance, OpenCode Go usage, Zen models) ride back on
-  `snapshot.raw`; the same plugin parsers that predate the migration rebuild the
-  row from them. The Anthropic snapshot is the Claude Code OAuth subscription
-  usage only; Anthropic API Admin usage is not fetched.
+- **Core read-only snapshots:** OpenAI Codex, Anthropic, OpenRouter and OpenCode
+  Go call `agent.account_usage.fetch_account_usage(provider, read_only=True)`.
+  Codex keeps the exact provider body on `snapshot.raw`. Nous uses the stock
+  core `build_nous_credits_snapshot` builder when the host has no `fetch_account_usage`
+  entry for it.
+- **Stock API-key fallbacks:** DeepSeek, Ollama Cloud and OpenCode Zen have no
+  stock core fetcher. The profile's own key is read only through
+  `agent.secret_scope.get_secret` and sent only to that provider's fixed HTTPS
+  origin. OpenRouter uses the same method only to recover the credits/key detail
+  the stock snapshot omits. The row discloses the env read and never attributes
+  it to a pool account. See `docs/stock-support.md`.
 - **Always-listed connection cards:** Claude / Anthropic, Google Gemini API, and
-  Z.ai / GLM use only code-owned metadata plus
-  `provider_credential_summary(provider)` (presence/source). No request, no
-  balance, no quota, and no credential value is produced; Google and Z.ai have
+  Z.ai / GLM use only code-owned metadata plus `provider_credential_summary(provider)`
+  when present, otherwise the profile secret scope (presence only). No request,
+  no balance, no quota, and no credential value is produced; Google and Z.ai have
   no account-usage adapter here.
-- **Brokered subscription sign-in:** xAI OAuth calls
-  `credentialed_provider_request("xai-oauth", ...)` for both the credits proxy
-  and the gRPC fallback; the token never enters plugin code.
-- **Non-secret inventory:** `provider_credential_summary(provider)` decides
-  presence, and `list_account_usage_identities(provider)` supplies pooled
+- **Brokered subscription sign-in:** when the host brokers xAI OAuth, the plugin
+  calls `credentialed_provider_request("xai-oauth", ...)` for both the credits
+  proxy and the gRPC fallback; the token never enters plugin code. Stock does not
+  broker xAI, so the row stays unavailable with the official account link.
+- **Non-secret inventory:** on enhanced hosts `provider_credential_summary(provider)`
+  decides presence, and `list_account_usage_identities(provider)` supplies pooled
   account ids/labels. Per-account usage is requested with the exact
   `fetch_account_usage(provider, identity_id=..., read_only=True)` id; a missing
-  identity is an unknown, never a provider-wide fallback.
+  identity is unknown, never a provider-wide fallback.
 - **Declarative definitions:** credential references resolve only through
   `agent.secret_scope.get_secret`.
 
-An older Hermes build that lacks these public helpers loads the plugin but shows
-an explicit upgrade-required row for the affected providers. There is no legacy
-raw-key fallback. `plugin.yaml` deliberately carries no release floor because no
-release contains the required core commits yet (see the comment there).
+An older build without `fetch_account_usage(read_only=True)` loads the plugin and
+shows an explicit unavailable row; there is no raw-key fallback. Optional helpers
+degrade one row and never disable the plugin. `plugin.yaml` floors at the
+released `0.23.1` baseline.
 
 The declarative path itself resolves credentials only through `agent.secret_scope.get_secret`; it never reads a credential from `os.environ`, `.env`, `auth.json`, vendor CLI credentials, or raw OAuth.
 
