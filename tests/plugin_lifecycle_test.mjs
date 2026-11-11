@@ -187,6 +187,10 @@ async function harness(initial = {}) {
     i18n: {}
   }
   mod.namespace.default.register(ctx)
+  check('identity: export id is namespaced', mod.namespace.default.id === 'jg-provider-usage', mod.namespace.default.id)
+  const pageContribution = contributions.find(c => c.area === 'routes')
+  check('identity: overview route is namespaced', pageContribution?.data?.path === '/jg-provider-usage', pageContribution?.data?.path)
+  check('identity: visible label stays Provider Usage', mod.namespace.default.name === 'Provider Usage', mod.namespace.default.name)
   const chipEl = React.createElement(contributions.find(c => c.area === 'statusBar.right').render)
   const pageEl = React.createElement(contributions.find(c => c.area === 'routes').render)
 

@@ -267,6 +267,21 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(errors)
 
 
+class PluginIdentityTests(unittest.TestCase):
+    def test_namespaced_identity_is_aligned_across_manifests_and_health(self):
+        plugin_yaml = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
+        self.assertTrue(plugin_yaml.splitlines()[0].strip() == "name: jg-provider-usage")
+        manifest = json.loads((ROOT / "dashboard" / "manifest.json").read_text(encoding="utf-8-sig"))
+        self.assertEqual(manifest["name"], "jg-provider-usage")
+        self.assertEqual(manifest["label"], "Provider Usage")
+        self.assertEqual(backend.health()["plugin"], "jg-provider-usage")
+        catalog = backend._definition_catalog(
+            {"valid": {}, "invalid": [], "bundled_count": 0, "profile_count": 0},
+            rows={}, prepared={}, profile=None,
+        )
+        self.assertEqual(catalog["directory"], "$HERMES_HOME/provider-usage/providers")
+
+
 class HttpRouteTests(IsolatedHome):
     def setUp(self):
         super().setUp()
@@ -274,11 +289,11 @@ class HttpRouteTests(IsolatedHome):
         from fastapi.testclient import TestClient
 
         app = FastAPI()
-        app.include_router(backend.router, prefix="/api/plugins/provider-usage")
+        app.include_router(backend.router, prefix="/api/plugins/jg-provider-usage")
         self.client = TestClient(app)
 
     def test_catalog_and_validate_over_http(self):
-        response = self.client.get("/api/plugins/provider-usage/definitions/catalog")
+        response = self.client.get("/api/plugins/jg-provider-usage/definitions/catalog")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("definitions", data)
@@ -291,7 +306,7 @@ class HttpRouteTests(IsolatedHome):
 
         raw = base_definition()
         response = self.client.post(
-            "/api/plugins/provider-usage/definitions/validate",
+            "/api/plugins/jg-provider-usage/definitions/validate",
             json={"definition": raw},
         )
         self.assertEqual(response.status_code, 200)
@@ -310,7 +325,7 @@ class HttpRouteTests(IsolatedHome):
             + "}",
             encoding="utf-8",
         )
-        response = self.client.get("/api/plugins/provider-usage/definitions/catalog")
+        response = self.client.get("/api/plugins/jg-provider-usage/definitions/catalog")
         self.assertEqual(response.status_code, 200)
         by_id = {entry["id"]: entry for entry in response.json()["definitions"]}
         self.assertEqual(by_id["bad-port"]["state"], "invalid")

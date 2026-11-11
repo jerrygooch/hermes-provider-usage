@@ -113,8 +113,10 @@ hermes plugins install jerrygooch/hermes-provider-usage
 The unified package ships both halves: the Desktop UI and the profile backend. Hermes installs it under the profile and Desktop loads the Desktop half. The installer confirms before enabling. Add `--enable` to skip that prompt, or enable later:
 
 ```bash
-hermes plugins enable provider-usage
+hermes plugins enable jg-provider-usage
 ```
+
+**Fresh installs use the plugin id `jg-provider-usage`.** The visible name stays **Provider Usage**, and the repository is still `jerrygooch/hermes-provider-usage`. The namespaced id lets this package coexist with an unrelated plugin that already owns `provider-usage`: installs, enable flags, routes, and desktop registrations do not replace or merge with it. If you previously installed the older `provider-usage` build in a profile, disable or remove that plugin yourself; this package does not adopt, edit, or migrate another plugin's profile config or state. Declarative definitions under `$HERMES_HOME/provider-usage/` remain compatible.
 
 For a reproducible install, pass an exact 40-character commit:
 
@@ -124,7 +126,7 @@ hermes plugins install jerrygooch/hermes-provider-usage --ref <40-character-comm
 
 Recycle that profile's gateway after install. Do **not** copy files into Hermes core, apply a core patch, or hand-edit the profile plugin folder.
 
-**Per profile.** The Python backend loads only in the profile where `provider-usage` is enabled. Run the install once for each profile that should expose usage; installing in one profile does not enable or modify another. The plugin never auto-enables or auto-installs into a profile. A profile without the backend returns `/overview` 404, and both the page and chip say **"Provider usage isn't enabled or installed in &lt;profile&gt;."**
+**Per profile.** The Python backend loads only in the profile where `jg-provider-usage` is enabled. Run the install once for each profile that should expose usage; installing in one profile does not enable or modify another. The plugin never auto-enables or auto-installs into a profile. A profile without the backend returns `/overview` 404, and both the page and chip say **"Provider usage isn't enabled or installed in &lt;profile&gt;."**
 
 Optional host helpers — exact account identity inventory, provider credential summary, banked-reset details, or the xAI broker — are detected at runtime. Their absence changes one row or one value to **Unavailable**; it does not disable the plugin.
 

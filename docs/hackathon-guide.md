@@ -39,7 +39,7 @@ Install the unified package from its repository:
 hermes plugins install jerrygooch/hermes-provider-usage
 ```
 
-The unified package ships both the Desktop half and the profile backend; Hermes installs it under the profile and Desktop loads the Desktop half. The installer confirms before enabling. Use `--enable` to skip that prompt, or run `hermes plugins enable provider-usage` later. For a reproducible install, add `--ref <40-character-commit-sha>`.
+The unified package ships both the Desktop half and the profile backend; Hermes installs it under the profile and Desktop loads the Desktop half. The installer confirms before enabling. Use `--enable` to skip that prompt, or run `hermes plugins enable jg-provider-usage` later. For a reproducible install, add `--ref <40-character-commit-sha>`.
 
 The backend is **per profile**. Run the install once for each profile that should expose usage; it does not enable or modify another profile. Recycle that profile's gateway after install. In Desktop, enable **Provider Usage** under **Settings → Plugins** if it is opt-in. A profile without the backend returns `/overview` 404 and both the page and chip say that the plugin is not enabled or installed in that profile. Hermes never auto-edits or auto-installs a profile, and no core patch or manual core edit is needed.
 

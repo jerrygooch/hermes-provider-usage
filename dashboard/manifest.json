@@ -1,5 +1,5 @@
 {
-  "name": "provider-usage",
+  "name": "jg-provider-usage",
   "label": "Provider Usage",
   "description": "Usage windows, subscription credits, API balances, and declarative read-only provider definitions.",
   "icon": "Gauge",

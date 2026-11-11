@@ -438,7 +438,7 @@ const footerProps = (over = {}) => ({
   check('mounted: the read is scoped to the focused session', list[0].params.session_id === 'sess-A', JSON.stringify(list[0].params))
   const cfg = h.queryConfigs.find(c => Array.isArray(c.key) && c.key[1] === 'running-agents')
   check('mounted: polling is 5s, not per agent', cfg && cfg.refetchInterval === 5000, JSON.stringify(cfg))
-  check('mounted: the query key is session + source qualified', JSON.stringify(cfg.key) === JSON.stringify(['provider-usage', 'running-agents', 'local::default', 'sess-A']), JSON.stringify(cfg.key))
+  check('mounted: the query key is session + source qualified', JSON.stringify(cfg.key) === JSON.stringify(['jg-provider-usage', 'running-agents', 'local::default', 'sess-A']), JSON.stringify(cfg.key))
 
   await h.inAct(async () => {
     h.requests.find(r => r.method === 'subagent.list').resolve({ subagents: [
@@ -455,7 +455,7 @@ const footerProps = (over = {}) => ({
   check('mounted: no zeroed percentage is fabricated', !h.text().includes('0%'), h.text())
 
   // Completion: the next snapshot from the same read no longer has 'a'.
-  h.setData(['provider-usage', 'running-agents', 'local::default', 'sess-A'], ns.normaliseRunningAgents({ subagents: [
+  h.setData(['jg-provider-usage', 'running-agents', 'local::default', 'sess-A'], ns.normaliseRunningAgents({ subagents: [
     agent({ subagent_id: 'b', model: 'grok-4', provider: 'xai-oauth', provider_account_id: ACCOUNT_XAI, goal: 'write docs' }),
     agent({ subagent_id: 'c', model: 'mystery-1' })
   ] }, 'sess-A'))

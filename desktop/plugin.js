@@ -23,7 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 const REFRESH_MS = 60_000
 const HAIRLINE = '1px solid var(--ui-stroke-tertiary)'
 // Route the "all providers" full page mounts at (Settings-style workspace page).
-const OVERVIEW_ROUTE = '/provider-usage'
+const OVERVIEW_ROUTE = '/jg-provider-usage'
 const textPrimary = { color: 'var(--ui-text-primary)' }
 const textSecondary = { color: 'var(--ui-text-secondary)' }
 const lastFocusedProviders = new Map()
@@ -146,7 +146,7 @@ function providerUsageQueryKey(fetchProfile, source) {
   // One cache per account. Chat switches must not refetch or flash another
   // provider's cached query — the chip picks the row client-side.
   return [
-    'provider-usage',
+    'jg-provider-usage',
     'overview',
     profileScope(fetchProfile),
     source || profileScope(fetchProfile)
@@ -692,7 +692,7 @@ const RUNNING_AGENT_TERMINAL = new Set(['completed', 'failed', 'interrupted', 'c
 function runningAgentsQueryKey(sourceId, sessionId) {
   // Session + connection-qualified: two chats, or the same chat name on another
   // source, must never share a running-agent snapshot.
-  return ['provider-usage', 'running-agents', sourceId || '', sessionId || '']
+  return ['jg-provider-usage', 'running-agents', sourceId || '', sessionId || '']
 }
 
 function normaliseRunningAgents(payload, sessionId) {
@@ -2139,7 +2139,7 @@ function openOverview(ctx) {
     return
   }
   if (typeof host.openWorkspace === 'function') {
-    host.openWorkspace('provider-usage-overview', {
+    host.openWorkspace('jg-provider-usage-overview', {
       title: 'Provider usage',
       minWidth: 400,
       render: () => jsx(ProviderUsagePage, { ctx })
@@ -3067,7 +3067,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
 export { CatalogSection, ConnectionCard, ConnectionCardsSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, connectionSetupText, connectionStateMeta, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
-  id: 'provider-usage',
+  id: 'jg-provider-usage',
   name: 'Provider Usage',
   defaultEnabled: true,
   register(ctx) {

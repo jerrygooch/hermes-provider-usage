@@ -95,7 +95,7 @@ malicious same-user code or a compromised Hermes process.
    ```
 
    The same schema is exposed at
-   `POST /api/plugins/provider-usage/definitions/validate` with
+   `POST /api/plugins/jg-provider-usage/definitions/validate` with
    `{"definition": {...}}`; it returns `ok`, `errors`, `warnings`, and a
    summary without making a network request or approval.
 6. Refresh the Provider Usage page. States are `connected`, `ready` (bundled,

@@ -172,6 +172,7 @@ const aliceKey = providerUsageQueryKey('Alice', 'xai-oauth', 'grok-4.6', 'local:
 const chaosForgeKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'local::ChaosForge')
 const secondBotKey = providerUsageQueryKey('ChaosForge', 'xai-oauth', 'grok-4.6', 'local::ChaosForge')
 if (providerScopeKey('local::Alice', 'alice-session') === providerScopeKey('local::ChaosForge', 'chaos-session')) throw new Error('Focused provider scopes must differ between Alice and ChaosForge')
+if (aliceKey[0] !== 'jg-provider-usage') throw new Error('Usage query keys must be namespaced to jg-provider-usage')
 if (JSON.stringify(aliceKey) === JSON.stringify(chaosForgeKey)) throw new Error('Profile-scoped usage keys must not share between Alice and ChaosForge')
 // The /overview request is provider+model only, so a session id must NOT fork
 // the cache — pane and chip now share ONE key for the same profile/provider.

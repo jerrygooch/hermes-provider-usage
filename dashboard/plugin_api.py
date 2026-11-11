@@ -1,4 +1,4 @@
-"""Provider usage and balance API for the Hermes Desktop provider-usage plugin.
+"""Provider usage and balance API for the Hermes Desktop jg-provider-usage plugin.
 
 The desktop plugin talks only to this scoped backend namespace. Provider
 credentials are resolved by Hermes core's public read-only usage seams, the
@@ -3820,7 +3820,7 @@ def _definition_catalog_entry(
             "file": f"{definition['id']}.json",
             "env": missing,
             "directory": "$HERMES_HOME/provider-usage/providers",
-            "validate": "POST /api/plugins/provider-usage/definitions/validate",
+            "validate": "POST /api/plugins/jg-provider-usage/definitions/validate",
             "approve": "python scripts/approve_definition.py <definition.json>",
         },
         "overrides": entry.get("overrides"),
@@ -4912,7 +4912,7 @@ def _cache_stats(days: int = 7) -> dict[str, dict[str, Any]]:
 
 @router.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "plugin": "provider-usage", "version": _PLUGIN_VERSION}
+    return {"ok": True, "plugin": "jg-provider-usage", "version": _PLUGIN_VERSION}
 
 
 def _clean_profile(value: Any) -> Optional[str]:
@@ -4957,7 +4957,7 @@ def _reset_service_module() -> Any:
     with _RESET_SERVICE_MODULE_LOCK:
         if _RESET_SERVICE_MODULE is None:
             path = _reset_service_path()
-            module_name = "hermes_dashboard_provider_usage_reset_service"
+            module_name = "hermes_dashboard_jg_provider_usage_reset_service"
             try:
                 if not path.is_file():
                     log.debug("provider-usage reset service is not installed at %s", path)

@@ -1855,7 +1855,7 @@ class InstalledFixtureRouteTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            plugin = home / "plugins" / "provider-usage"
+            plugin = home / "plugins" / "jg-provider-usage"
             plugin.mkdir(parents=True)
             shutil.copytree(source / "dashboard", plugin / "dashboard",
                             ignore=shutil.ignore_patterns("__pycache__"))

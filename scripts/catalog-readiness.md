@@ -14,7 +14,7 @@ restart was performed by this lane.
 
 | Field | Value | Basis |
 |---|---|---|
-| `name` | `provider-usage` | Matches `dashboard/manifest.json` and the installed plugin id. |
+| `name` | `jg-provider-usage` | Matches `dashboard/manifest.json` and the installed plugin id. |
 | `version` | `0.10.0` | `package.json`, `package-lock.json`, `dashboard/manifest.json`, `plugin.yaml`, and the README all agree. |
 | `requires_hermes` | `>=0.23.1` | Stock 0.23.1 provides the required read-only account-usage route. Optional identity/summary/broker helpers degrade one row when absent. |
 | `requires_auth` | `openai-codex`, `xai-oauth` | Codex uses the read-only snapshot; xAI is used only when the host brokers the sign-in. Stock does not broker xAI, so that row stays link-only. |

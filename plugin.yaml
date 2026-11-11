@@ -1,4 +1,4 @@
-name: provider-usage
+name: jg-provider-usage
 version: "0.10.0"
 description: >-
   Subscription-aware provider usage and balance page, status-bar chip, and
