@@ -419,7 +419,7 @@ def _base(provider: str, *, title: str, source: str, plan: Optional[str] = None)
         "label": _PROVIDER_LABELS.get(provider, provider),
         "available": False,
         "configured": True,
-        "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go", "ollama-cloud"} else "balance",
+        "capability": "usage" if provider in {"openai-codex", "anthropic", "xai-oauth", "opencode-go", "ollama-cloud", "arcee"} else "balance",
         "source": source,
         "fetched_at": _now(),
         "title": title,
@@ -2080,7 +2080,7 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.4"
+_PLUGIN_VERSION = "0.10.5"
 #: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
 #: 25s and then renders "Usage unavailable" with no row at all, so the backend must
 #: answer inside that cap even when a provider hangs: unfinished providers become
@@ -4133,6 +4133,142 @@ def _fetch_novita() -> dict[str, Any]:
         return _provider_unavailable("novita")
 
 
+# --- Arcee usage (token counts, documented) ---------------------------------------------
+_ARCEE_USAGE_URL = "https://api.arcee.ai/api/v1/usage/summary"
+
+
+def _arcee_row(payload: dict[str, Any]) -> dict[str, Any]:
+    """Arcee reports tokens and requests, not dollars: those are details, never a fake balance."""
+    row = _base("arcee", title="Arcee usage", source="usage_summary_api")
+    for key, label in (("total_tokens", "Tokens used"), ("total_requests", "Requests"),
+                       ("unique_models", "Models")):
+        value = _number(payload.get(key))
+        if value is not None:
+            row["details"].append(f"{label}: {int(value):,}")
+    days = _number(payload.get("date_range_days"))
+    if days is not None:
+        row["details"].append(f"Reporting range: last {int(days)} days")
+    row["available"] = any(item.startswith(("Tokens used", "Requests")) for item in row["details"])
+    if not row["available"]:
+        row["unavailable_reason"] = "Arcee returned no usage totals."
+    return row
+
+
+def _fetch_arcee() -> dict[str, Any]:
+    token = _read_definition_secret("ARCEEAI_API_KEY")
+    if not token:
+        return _provider_unavailable("arcee")
+    try:
+        response = _fixed_provider_get(_ARCEE_USAGE_URL, token, host="api.arcee.ai", timeout=12.0)
+        payload = response.json() or {}
+        if not isinstance(payload, dict):
+            return _provider_unavailable("arcee")
+        return _mark_env_read(_arcee_row(payload), "ARCEEAI_API_KEY")
+    except Exception:
+        log.debug("Arcee usage read failed", exc_info=True)
+        return _provider_unavailable("arcee")
+
+
+# --- Fireworks spend (self-describing currency) -----------------------------------------
+_FIREWORKS_ACCOUNTS_URL = "https://api.fireworks.ai/v1/accounts"
+
+
+def _fireworks_row(summary: dict[str, Any], account: str) -> dict[str, Any]:
+    """``totalCost`` carries its own currency code, so no unit is assumed."""
+    row = _base("fireworks", title="Fireworks spend", source="billing_summary_api")
+    for item in summary.get("lineItems") or ():
+        if not isinstance(item, dict):
+            continue
+        cost = item.get("totalCost") if isinstance(item.get("totalCost"), dict) else {}
+        units, nanos = _number(cost.get("units")), _number(cost.get("nanos"))
+        if units is None and nanos is None:
+            continue
+        amount = (units or 0.0) + (nanos or 0.0) / 1_000_000_000
+        row["balances"].append({
+            "label": str(item.get("series") or "Spend").replace("_", " ").title(),
+            "amount": round(amount, 4),
+            "currency": str(cost.get("currencyCode") or "USD").upper(),
+            "kind": "spend",
+        })
+    row["details"].append(f"Account: {account}")
+    row["details"].append("Spend for the last 30 days, as rated by Fireworks.")
+    row["available"] = bool(row["balances"])
+    if not row["available"]:
+        row["unavailable_reason"] = "Fireworks returned no billing line items."
+    return row
+
+
+def _fetch_fireworks() -> dict[str, Any]:
+    token = _read_definition_secret("FIREWORKS_API_KEY")
+    if not token:
+        return _provider_unavailable("fireworks")
+    try:
+        accounts = _fixed_provider_get(_FIREWORKS_ACCOUNTS_URL, token, host="api.fireworks.ai", timeout=12.0).json() or {}
+        names = [str(item.get("name") or "") for item in accounts.get("accounts") or () if isinstance(item, dict)]
+        account = next((name.split("/")[-1] for name in names if name), "")
+        if not account:
+            return _provider_unavailable("fireworks")
+        end = datetime.now(timezone.utc).date()
+        start = end - timedelta(days=30)
+        url = f"{_FIREWORKS_ACCOUNTS_URL}/{account}/billing/summary?startTime={start}&endTime={end}"
+        summary = _fixed_provider_get(url, token, host="api.fireworks.ai", timeout=12.0).json() or {}
+        return _mark_env_read(_fireworks_row(summary, account), "FIREWORKS_API_KEY")
+    except Exception:
+        log.debug("Fireworks billing read failed", exc_info=True)
+        return _provider_unavailable("fireworks")
+
+
+# --- DeepInfra balance (negative Stripe balance means credit on hand) --------------------
+_DEEPINFRA_CHECKLIST_URL = "https://api.deepinfra.com/payment/checklist"
+
+
+def _deepinfra_row(payload: dict[str, Any]) -> dict[str, Any]:
+    row = _base("deepinfra", title="DeepInfra balance", source="payment_checklist_api")
+    stripe = _number(payload.get("stripe_balance"))
+    if stripe is not None:
+        if stripe < 0:
+            row["balances"].append({"label": "Credit available", "amount": round(abs(stripe), 2),
+                                    "currency": "USD", "kind": "credit"})
+        else:
+            row["balances"].append({"label": "Amount due", "amount": round(stripe, 2),
+                                    "currency": "USD", "kind": "spend"})
+        row["details"].append("DeepInfra reports a negative Stripe balance when funds are available.")
+    credits, seen = 0.0, False
+    for item in payload.get("scoped_credits") or ():
+        remaining = _number(item.get("remaining_cents")) if isinstance(item, dict) else None
+        if remaining is None:
+            continue
+        credits += remaining / 100
+        seen = True
+    if seen:
+        row["balances"].append({"label": "Scoped credits", "amount": round(credits, 2),
+                                "currency": "USD", "kind": "credit"})
+    if payload.get("suspended") is True:
+        row["details"].append("Account suspended: yes")
+    overdue = _number(payload.get("overdue_invoices"))
+    if overdue:
+        row["details"].append(f"Overdue invoices: {int(overdue)}")
+    row["available"] = bool(row["balances"])
+    if not row["available"]:
+        row["unavailable_reason"] = "DeepInfra returned no balance fields."
+    return row
+
+
+def _fetch_deepinfra() -> dict[str, Any]:
+    token = _read_definition_secret("DEEPINFRA_API_KEY")
+    if not token:
+        return _provider_unavailable("deepinfra")
+    try:
+        response = _fixed_provider_get(_DEEPINFRA_CHECKLIST_URL, token, host="api.deepinfra.com", timeout=12.0)
+        payload = response.json() or {}
+        if not isinstance(payload, dict):
+            return _provider_unavailable("deepinfra")
+        return _mark_env_read(_deepinfra_row(payload), "DEEPINFRA_API_KEY")
+    except Exception:
+        log.debug("DeepInfra balance read failed", exc_info=True)
+        return _provider_unavailable("deepinfra")
+
+
 def _fetch_provider_raw(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if definition is not None:
         return _fetch_declarative_cached(definition, profile=None)
@@ -4156,6 +4292,12 @@ def _fetch_provider_raw(provider: str, *, definition: Optional[dict[str, Any]] =
         return _fetch_anthropic()
     if provider == "novita":
         return _fetch_novita()
+    if provider == "arcee":
+        return _fetch_arcee()
+    if provider == "fireworks":
+        return _fetch_fireworks()
+    if provider == "deepinfra":
+        return _fetch_deepinfra()
     return _unavailable(provider, "No usage or balance endpoint is known for this provider.")
 
 
