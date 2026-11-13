@@ -1213,7 +1213,7 @@ function PeakNote({ peak, separated = false }) {
       }),
       peak.schedule_local || peak.schedule
         ? jsx('span', {
-            style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 },
+            style: { ...textSecondary, fontSize: 10, lineHeight: 1.45, overflowWrap: 'anywhere' },
             title: peak.schedule_local
               ? [
                   `Published schedule (UTC): ${peak.schedule}`,
@@ -1242,18 +1242,18 @@ function RatesPanel({ row, always = false, compact = false }) {
         ? jsx('div', {
             style: { display: 'grid', gap: compact ? 6 : 7 },
             children: pricing.map((entry, index) => jsxs('div', {
-              style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+              style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '2px 10px', flexWrap: 'wrap' },
               children: [
-                jsxs('span', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }, children: [
+                jsxs('span', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 90px' }, children: [
                   jsx('span', { style: { ...textSecondary, fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry?.model || 'Model' }, 'model'),
                   entry?.active ? jsx(Badge, { variant: 'outline', size: 'xs', children: 'current' }, 'current') : null
                 ] }, 'name'),
-                jsx('span', { style: { ...textPrimary, fontSize: 11, fontWeight: 550, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: rateSummary(entry) || '—' }, 'rates')
+                jsx('span', { style: { ...textPrimary, fontSize: 11, fontWeight: 550, fontVariantNumeric: 'tabular-nums', textAlign: 'right', marginLeft: 'auto', overflowWrap: 'anywhere' }, children: rateSummary(entry) || '—' }, 'rates')
               ]
             }, `rate-${index}`))
           }, 'rows')
         : jsx('span', { style: { ...textSecondary, fontSize: 10, lineHeight: 1.45 }, children: 'No published token-rate card is available for this provider yet.' }, 'empty'),
-      source ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45 }, children: source }, 'source') : null,
+      source ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, lineHeight: 1.45, overflowWrap: 'anywhere' }, children: source }, 'source') : null,
       pricing.some(entry => entry?.changed_from_card)
         ? jsx('span', {
             style: { color: 'var(--ui-orange)', fontSize: 9.5, lineHeight: 1.45, fontWeight: 550 },
@@ -2253,7 +2253,7 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
         side: 'top',
         sideOffset: 8,
         collisionPadding: 8,
-        style: { width: 356, maxHeight: 'min(84vh, 520px)', overflowY: 'auto', overflowX: 'hidden', padding: 0, scrollbarGutter: 'stable both-edges' },
+        style: { width: 356, maxHeight: 'min(84vh, 520px)', overflowY: 'auto', overflowX: 'hidden', padding: 0 },
         children: jsx(ChipUsagePopover, {
           ctx,
           model,
