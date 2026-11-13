@@ -4133,7 +4133,7 @@ def _fetch_novita() -> dict[str, Any]:
         return _provider_unavailable("novita")
 
 
-def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _fetch_provider_raw(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if definition is not None:
         return _fetch_declarative_cached(definition, profile=None)
     if provider == "openai-codex":
@@ -4157,6 +4157,47 @@ def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = Non
     if provider == "novita":
         return _fetch_novita()
     return _unavailable(provider, "No usage or balance endpoint is known for this provider.")
+
+
+# Every card uses the same window vocabulary and order, whichever words the provider uses.
+_WINDOW_KIND_ORDER = ("five_hour", "daily", "weekly", "monthly", "rolling", "custom")
+
+
+def _window_kind_from_label(label: Any) -> str:
+    text = str(label or "").lower()
+    if "5" in text and ("hour" in text or "hr" in text or "session" in text):
+        return "five_hour"
+    if "day" in text or "daily" in text or "24h" in text:
+        return "daily"
+    if "week" in text:
+        return "weekly"
+    if "month" in text:
+        return "monthly"
+    if "rolling" in text:
+        return "rolling"
+    return ""
+
+
+def _normalize_card(row: dict[str, Any]) -> dict[str, Any]:
+    """Give every window a kind when its label states one; keep the provider's own order.
+
+    Order is not normalised on purpose: a provider may list model-scoped windows in a
+    meaningful sequence, and the renderer already picks the governing window per model.
+    """
+    for limit in row.get("limits") or ():
+        windows = limit.get("windows") if isinstance(limit, dict) else None
+        if not isinstance(windows, list):
+            continue
+        for window in windows:
+            if isinstance(window, dict) and not window.get("kind"):
+                kind = _window_kind_from_label(window.get("label"))
+                if kind:
+                    window["kind"] = kind
+    return row
+
+
+def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    return _normalize_card(_fetch_provider_raw(provider, definition=definition))
 
 
 def _pretty_name(value: Any) -> Optional[str]:
