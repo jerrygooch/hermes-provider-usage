@@ -1,5 +1,5 @@
 name: jg-provider-usage
-version: "0.10.3"
+version: "0.10.4"
 description: >-
   Subscription-aware provider usage and balance page, status-bar chip, and
   profile-scoped backend for Hermes Desktop, plus declarative read-only

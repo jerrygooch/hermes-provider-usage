@@ -1523,11 +1523,7 @@ def _compat_enabled() -> bool:
     """Opt-in switch: env var, or ``compat_oauth_reads`` in the profile's settings file."""
     if os.getenv(_COMPAT_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
-    try:
-        settings = json.loads((_hermes_home() / "provider-usage" / "settings.json").read_text("utf-8"))
-    except (OSError, ValueError):
-        return False
-    return isinstance(settings, dict) and settings.get(_COMPAT_SETTING) is True
+    return _read_settings().get(_COMPAT_SETTING) is True
 
 
 def _compat_xai_request(
@@ -2084,7 +2080,7 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.3"
+_PLUGIN_VERSION = "0.10.4"
 #: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
 #: 25s and then renders "Usage unavailable" with no row at all, so the backend must
 #: answer inside that cap even when a provider hangs: unfinished providers become
@@ -4097,6 +4093,46 @@ def _fetch_anthropic() -> dict[str, Any]:
     return _serialize_snapshot(snapshot)
 
 
+# --- Novita balance (documented, works with the inference key) ---------------------------
+_NOVITA_BALANCE_URL = "https://api.novita.ai/openapi/v1/billing/balance/detail"
+_NOVITA_UNITS_PER_USD = 10000
+
+
+def _novita_row(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Novita's balance body: integer strings in 1/10000 USD."""
+    row = _base("novita", title="Novita balance", source="billing_balance_api")
+    for key, label, kind in (("availableBalance", "Available balance", "credit"),
+                             ("cashBalance", "Cash balance", "wallet"),
+                             ("pendingCharges", "Pending charges", "spend"),
+                             ("creditLimit", "Credit limit", "limit")):
+        amount = _number(payload.get(key))
+        if amount is None:
+            continue
+        row["balances"].append({"label": label, "amount": round(amount / _NOVITA_UNITS_PER_USD, 4),
+                                "currency": "USD", "kind": kind})
+    row["available"] = bool(row["balances"])
+    if row["available"]:
+        row["details"].append("Amounts are reported by Novita in units of 1/10000 USD.")
+    else:
+        row["unavailable_reason"] = "Novita returned no balance fields."
+    return row
+
+
+def _fetch_novita() -> dict[str, Any]:
+    token = _read_definition_secret("NOVITA_API_KEY")
+    if not token:
+        return _provider_unavailable("novita")
+    try:
+        response = _fixed_provider_get(_NOVITA_BALANCE_URL, token, host="api.novita.ai", timeout=12.0)
+        payload = response.json() or {}
+        if not isinstance(payload, dict):
+            return _provider_unavailable("novita")
+        return _mark_env_read(_novita_row(payload), "NOVITA_API_KEY")
+    except Exception:
+        log.debug("Novita balance read failed", exc_info=True)
+        return _provider_unavailable("novita")
+
+
 def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if definition is not None:
         return _fetch_declarative_cached(definition, profile=None)
@@ -4118,6 +4154,8 @@ def _fetch_provider(provider: str, *, definition: Optional[dict[str, Any]] = Non
         return _fetch_nous()
     if provider == "anthropic":
         return _fetch_anthropic()
+    if provider == "novita":
+        return _fetch_novita()
     return _unavailable(provider, "No usage or balance endpoint is known for this provider.")
 
 
@@ -5095,6 +5133,82 @@ def _report_url(provider: str = "") -> str:
     if provider:
         params["provider"] = provider
     return f"https://github.com/{_REPORT_REPO}/issues/new?{urlencode(params)}"
+
+
+# --- Settings ---------------------------------------------------------------------------
+# One file per profile, data-only, no secrets. The spec is the allowlist: an unknown key is
+# rejected rather than stored, so a future setting needs a deliberate entry here.
+_SETTINGS_FILE = "settings.json"
+_SETTINGS_SPEC: dict[str, dict[str, Any]] = {
+    "compat_oauth_reads": {
+        "type": "bool",
+        "default": False,
+        "label": "Compatibility mode for OAuth providers",
+        "help": ("Read subscription usage through Hermes's own locked sign-in path when this "
+                 "build has no provider broker. The access token stays in this process for one "
+                 "request and is never stored by the plugin."),
+    },
+}
+
+
+def _settings_path() -> Path:
+    return _hermes_home() / "provider-usage" / _SETTINGS_FILE
+
+
+def _read_settings() -> dict[str, Any]:
+    """Stored values coerced to their declared type; anything unrecognised falls back."""
+    try:
+        raw = json.loads(_settings_path().read_text("utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    values: dict[str, Any] = {}
+    for key, spec in _SETTINGS_SPEC.items():
+        value = raw.get(key, spec["default"])
+        values[key] = value if isinstance(value, bool) else bool(spec["default"])
+    return values
+
+
+def _write_settings(values: dict[str, Any]) -> None:
+    """Atomic replace, so a crash cannot leave a half-written settings file."""
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_suffix(".json.tmp")
+    staged.write_text(json.dumps(values, indent=2, sort_keys=True) + "\n", "utf-8")
+    os.replace(staged, path)
+
+
+def _settings_spec_for_ui() -> list[dict[str, Any]]:
+    return [{"key": key, "type": spec["type"], "default": spec["default"],
+             "label": spec["label"], "help": spec["help"]} for key, spec in _SETTINGS_SPEC.items()]
+
+
+@router.get("/settings")
+def get_settings() -> dict[str, Any]:
+    """The profile's plugin preferences, with the spec the UI renders from."""
+    return {"ok": True, "settings": _read_settings(), "spec": _settings_spec_for_ui(),
+            "path": "$HERMES_HOME/provider-usage/settings.json"}
+
+
+@router.put("/settings")
+def put_settings(payload: Optional[dict[str, Any]] = Body(default=None)) -> dict[str, Any]:
+    """Validate against the spec, then store. Unknown keys and wrong types are refused."""
+    body = payload if isinstance(payload, dict) else {}
+    updates = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    errors = [f"unknown setting: {key}" for key in sorted(set(updates) - set(_SETTINGS_SPEC))]
+    values = _read_settings()
+    for key, spec in _SETTINGS_SPEC.items():
+        if key not in updates:
+            continue
+        value = updates[key]
+        if spec["type"] == "bool" and not isinstance(value, bool):
+            errors.append(f"{key} must be true or false")
+            continue
+        values[key] = value
+    if errors:
+        return {"ok": False, "errors": errors, "settings": _read_settings()}
+    _write_settings(values)
+    return {"ok": True, "errors": [], "settings": values, "path": "$HERMES_HOME/provider-usage/settings.json"}
 
 
 def _clean_profile(value: Any) -> Optional[str]:

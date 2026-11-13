@@ -3,7 +3,7 @@
   "label": "Provider Usage",
   "description": "Usage windows, subscription credits, API balances, and declarative read-only provider definitions.",
   "icon": "Gauge",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "entry": "dist/index.js",
   "css": "dist/style.css",
   "api": "plugin_api.py"

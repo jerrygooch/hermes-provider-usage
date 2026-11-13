@@ -2890,6 +2890,92 @@ function CatalogSection({ catalog }) {
   })
 }
 
+function SettingsSection({ ctx }) {
+  const [open, setOpen] = useState(false)
+  const [spec, setSpec] = useState([])
+  const [values, setValues] = useState({})
+  const [saving, setSaving] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return undefined
+    let alive = true
+    Promise.resolve(ctx.rest('/settings'))
+      .then(payload => {
+        if (!alive) return
+        setSpec(Array.isArray(payload?.spec) ? payload.spec : [])
+        setValues(payload?.settings && typeof payload.settings === 'object' ? payload.settings : {})
+        setError('')
+      })
+      .catch(reason => { if (alive) setError(String(reason?.message || reason || 'Settings unavailable')) })
+    return () => { alive = false }
+  }, [ctx, open])
+
+  const setValue = async (key, next) => {
+    const previous = values[key]
+    setSaving(key)
+    setValues(current => ({ ...current, [key]: next }))
+    setError('')
+    try {
+      const payload = await ctx.rest('/settings', { method: 'PUT', body: { settings: { [key]: next } } })
+      if (payload?.ok === false) throw new Error((payload?.errors || ['Setting was refused']).join('; '))
+      setValues(current => ({ ...current, ...(payload?.settings || {}) }))
+    } catch (reason) {
+      setValues(current => ({ ...current, [key]: previous }))
+      setError(String(reason?.message || reason || 'Setting was refused'))
+    } finally {
+      setSaving('')
+    }
+  }
+
+  const rows = spec.map(item => {
+    const checked = values[item.key] === true
+    return jsxs('div', {
+      style: { display: 'flex', gap: 14, alignItems: 'flex-start', padding: '11px 0', borderTop: HAIRLINE },
+      children: [
+        jsxs('div', {
+          style: { flex: 1, minWidth: 0 },
+          children: [
+            jsx('div', { style: { ...textPrimary, fontSize: 12, fontWeight: 600 }, children: item.label || item.key }, 'label'),
+            item.help ? jsx('p', { style: { ...textSecondary, margin: '3px 0 0', fontSize: 10.5, lineHeight: 1.5 }, children: item.help }, 'help') : null
+          ]
+        }, 'text'),
+        jsx(Button, {
+          type: 'button',
+          variant: checked ? 'primary' : 'secondary',
+          size: 'micro',
+          role: 'switch',
+          'aria-checked': checked,
+          'aria-label': item.label || item.key,
+          disabled: saving === item.key,
+          onClick: () => { haptic('tap'); void setValue(item.key, !checked) },
+          children: checked ? 'On' : 'Off'
+        }, 'switch')
+      ]
+    }, item.key)
+  })
+
+  return jsxs('section', {
+    style: { borderTop: HAIRLINE, padding: '12px 18px 18px' },
+    children: [
+      jsxs('button', {
+        type: 'button',
+        onClick: () => { haptic('tap'); setOpen(current => !current) },
+        'aria-expanded': open,
+        style: { all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+        children: [
+          jsx('h2', { style: { ...textPrimary, margin: 0, fontSize: 11, lineHeight: 1.4, fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em' }, children: 'Settings' }, 'title'),
+          jsx('span', { style: { ...textSecondary, fontSize: 11 }, children: open ? 'Hide' : 'Show' }, 'toggle')
+        ]
+      }, 'button'),
+      open ? jsxs('div', { style: { marginTop: 8 }, children: [
+        error ? jsx('p', { style: { ...textSecondary, margin: '0 0 6px', fontSize: 10.5, color: 'var(--dt-destructive)' }, children: error }, 'error') : null,
+        rows.length ? rows : jsx('p', { style: { ...textSecondary, margin: 0, fontSize: 11 }, children: 'No settings yet.' }, 'empty')
+      ] }, 'body') : null
+    ]
+  })
+}
+
 function ProviderUsagePage({ ctx, initialProvider = '' }) {
   const model = useValue(host.state.model)
   const sessionId = useValue(host.state.focusedSessionId)
@@ -3062,7 +3148,8 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
           ]
         }, 'accounts'),
         jsx(ConnectionCardsSection, { connections: matched?.connections, ctx }, 'connections'),
-        jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog')
+        jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog'),
+        jsx(SettingsSection, { ctx }, 'settings')
       ]
     })
   }
@@ -3073,7 +3160,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
   })
 }
 
-export { CatalogSection, ConnectionCard, ConnectionCardsSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, connectionSetupText, connectionStateMeta, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
+export { CatalogSection, SettingsSection, ConnectionCard, ConnectionCardsSection, DefinitionBadge, DefinitionPanel, RunningAgentsFooter, RunningAgentsSection, activeSourceId, catalogSetupText, compactFundingSummary, connectionSetupText, connectionStateMeta, eventOwns, fundingState, governingWindows, isBackendNotEnabled, mergeOpenCodeRows, normaliseRunningAgents, profileScope, providerFromPayload, providerScopeKey, providerUsageQueryKey, rememberProvider, rememberedProvider, rememberedSessionProvider, resolveUsageScope, runningAgentAccount, runningAgentGroups, runningAgentProvider, runningAgentTotal, runningAgentsQueryKey, sharedPoolUsage, shouldEnterProfileSwitch, shouldSettleProfileSwitch, statusFundingSummary }
 
 export default {
   id: 'jg-provider-usage',
