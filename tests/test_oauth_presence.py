@@ -30,11 +30,7 @@ class OAuthPresenceTest(unittest.TestCase):
         self.addCleanup(setattr, self.api, "_credential_summary", self.api._credential_summary)
 
     def _helper(self, payload):
-        def _core_helper(name):
-            if name == "get_xai_oauth_auth_status":
-                return lambda: payload
-            return None
-        setattr(self.api, '_core_helper', _core_helper)
+        setattr(self.api, '_xai_auth_status_fn', lambda: (lambda: payload))
 
     def test_a_signed_in_grok_account_counts_as_configured(self):
         setattr(self.api, '_credential_summary', lambda provider: None)
@@ -55,7 +51,7 @@ class OAuthPresenceTest(unittest.TestCase):
 
     def test_a_missing_core_helper_leaves_presence_unknown(self):
         setattr(self.api, '_credential_summary', lambda provider: None)
-        setattr(self.api, '_core_helper', lambda name: None)
+        setattr(self.api, '_xai_auth_status_fn', lambda: None)
         configured, source, known = self.api._local_presence("xai-oauth")
         self.assertFalse(configured)
         self.assertEqual(source, "none")

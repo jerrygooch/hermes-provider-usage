@@ -654,10 +654,20 @@ def _credential_summary(provider: str) -> dict[str, Any]:
 # OAuth providers have no env key, so "signed in" has to come from core's own
 # non-secret status. The snapshot carries a token field: take the boolean and
 # drop the dict in the same statement, so nothing here can log or reuse it.
+def _xai_auth_status_fn() -> Any:
+    """Core's xAI sign-in status helper, from the module that actually defines it."""
+    try:
+        from hermes_cli.auth import get_xai_oauth_auth_status
+
+        return get_xai_oauth_auth_status
+    except Exception:
+        return None
+
+
 def _oauth_presence(provider: str) -> Optional[tuple[bool, str, bool]]:
     if provider not in _OAUTH_ONLY_PROVIDERS:
         return None
-    status_fn = _core_helper("get_xai_oauth_auth_status") if provider == "xai-oauth" else None
+    status_fn = _xai_auth_status_fn() if provider == "xai-oauth" else None
     if status_fn is None:
         return None
     try:
