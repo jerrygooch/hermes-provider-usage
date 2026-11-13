@@ -47,6 +47,8 @@ _PROVIDER_LABELS = {
     "ollama-cloud": "Ollama Cloud",
 }
 _SUPPORTED = {"openai-codex", "openrouter", "deepseek", "xai-oauth", "nous", "anthropic", "opencode-go", "opencode-zen", "ollama-cloud"}
+# Signed in through Hermes, never through an env key: presence comes from core status.
+_OAUTH_ONLY_PROVIDERS = frozenset({"xai-oauth"})
 # Code-owned official account-management landings. These are external links
 # only: opening one never changes a plan, payment method, or credential from
 # this plugin. Subscription and API products are deliberately separate even
@@ -649,6 +651,22 @@ def _credential_summary(provider: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# OAuth providers have no env key, so "signed in" has to come from core's own
+# non-secret status. The snapshot carries a token field: take the boolean and
+# drop the dict in the same statement, so nothing here can log or reuse it.
+def _oauth_presence(provider: str) -> Optional[tuple[bool, str, bool]]:
+    if provider not in _OAUTH_ONLY_PROVIDERS:
+        return None
+    status_fn = _core_helper("get_xai_oauth_auth_status") if provider == "xai-oauth" else None
+    if status_fn is None:
+        return None
+    try:
+        signed_in = bool((status_fn() or {}).get("logged_in"))
+    except Exception:
+        return None
+    return signed_in, "oauth" if signed_in else "none", True
+
+
 def _local_presence(provider: str) -> tuple[bool, str, bool]:
     """Return ``(configured, source, known)`` without reading a credential store.
 
@@ -660,6 +678,9 @@ def _local_presence(provider: str) -> tuple[bool, str, bool]:
     summary = _credential_summary(provider)
     if isinstance(summary, dict) and "configured" in summary:
         return bool(summary.get("configured")), str(summary.get("source") or "none"), True
+    oauth = _oauth_presence(provider)
+    if oauth is not None:
+        return oauth
     for name in _PROVIDER_ENV_SECRETS.get(provider, ()):
         if _read_definition_secret(name):
             return True, "env", True
@@ -2080,7 +2101,7 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.5"
+_PLUGIN_VERSION = "0.10.6"
 #: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
 #: 25s and then renders "Usage unavailable" with no row at all, so the backend must
 #: answer inside that cap even when a provider hangs: unfinished providers become

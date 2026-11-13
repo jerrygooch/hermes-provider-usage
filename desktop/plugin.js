@@ -2253,7 +2253,7 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
         side: 'top',
         sideOffset: 8,
         collisionPadding: 8,
-        style: { width: 356, maxHeight: 'min(84vh, 520px)', overflowY: 'auto', overflowX: 'hidden', padding: 0 },
+        style: { width: 356, maxHeight: 'min(84vh, 520px)', overflowY: 'auto', overflowX: 'hidden', padding: 0, scrollbarGutter: 'stable both-edges' },
         children: jsx(ChipUsagePopover, {
           ctx,
           model,
@@ -2292,7 +2292,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
       openOverview(ctx)
       if (typeof onRequestClose === 'function') onRequestClose()
     },
-    style: { width: '100%', justifyContent: 'center' },
+    style: { width: '100%', maxWidth: '100%', justifyContent: 'center', textAlign: 'center' },
     children: [
       jsx(icons.BarChart3, { 'aria-hidden': true, style: { width: 12, height: 12 } }, 'icon'),
       jsx('span', { children: 'View all providers' })
@@ -2317,7 +2317,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
       children: [
         jsx('div', { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [jsx(icons.AlertCircle, { 'aria-hidden': true, style: { width: 15, height: 15, color: 'var(--ui-text-tertiary)' } }, 'icon'), jsx('strong', { style: { ...textPrimary, fontSize: 12, fontWeight: 600 }, children: `Not enabled in ${scope.fetchProfile}` }, 'title')] }),
         jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: 'Enable or install this plugin in that profile to see usage. Hermes never edits profiles automatically.' }),
-        viewAll,
+        jsx('div', { style: { display: 'flex', justifyContent: 'center' }, children: viewAll }, 'view-all'),
         runningAgents
       ]
     })
@@ -2329,7 +2329,7 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
       style: { display: 'grid', gap: 12, padding: 16 },
       children: [
         jsx('span', { style: { ...textSecondary, fontSize: 11, lineHeight: 1.5 }, children: waiting ? 'Checking which account this chat is using…' : query.isError ? 'Provider data could not be loaded.' : 'No usage is being reported for the current provider.' }),
-        viewAll,
+        jsx('div', { style: { display: 'flex', justifyContent: 'center' }, children: viewAll }, 'view-all'),
         runningAgents
       ]
     })
@@ -2438,9 +2438,9 @@ function ChipUsagePopover({ ctx, model, scope, row, state, query, backendGone, p
             ? jsx(RatesPanel, { row, compact: true, always: true }, 'rates')
             : null,
           jsxs('div', {
-            style: { display: 'grid', gap: 8, borderTop: HAIRLINE, paddingTop: 11, marginTop: 1 },
+            style: { display: 'grid', gap: 8, borderTop: HAIRLINE, paddingTop: 11, marginTop: 1, justifyItems: 'stretch' },
             children: [
-              viewAll,
+              jsx('div', { style: { display: 'flex', justifyContent: 'center' }, children: viewAll }, 'view-all'),
               runningAgents,
               updated
                 ? jsx('span', { style: { ...textSecondary, fontSize: 9.5, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }, children: `Updated ${updated}` }, 'updated')
@@ -2890,7 +2890,7 @@ function CatalogSection({ catalog }) {
   })
 }
 
-function SettingsSection({ ctx }) {
+function SettingsSection({ ctx, onChanged }) {
   const [open, setOpen] = useState(false)
   const [spec, setSpec] = useState([])
   const [values, setValues] = useState({})
@@ -2920,6 +2920,9 @@ function SettingsSection({ ctx }) {
       const payload = await ctx.rest('/settings', { method: 'PUT', body: { settings: { [key]: next } } })
       if (payload?.ok === false) throw new Error((payload?.errors || ['Setting was refused']).join('; '))
       setValues(current => ({ ...current, ...(payload?.settings || {}) }))
+      // A setting can change how providers are read, so the numbers on screen are
+      // stale the moment it saves. Refresh instead of asking the user to.
+      if (typeof onChanged === 'function') onChanged()
     } catch (reason) {
       setValues(current => ({ ...current, [key]: previous }))
       setError(String(reason?.message || reason || 'Setting was refused'))
@@ -3149,7 +3152,7 @@ function ProviderUsagePageBody({ ctx, initialProvider, model, sessionId, gateway
         }, 'accounts'),
         jsx(ConnectionCardsSection, { connections: matched?.connections, ctx }, 'connections'),
         jsx(CatalogSection, { catalog: matched?.catalog }, 'catalog'),
-        jsx(SettingsSection, { ctx }, 'settings')
+        jsx(SettingsSection, { ctx, onChanged: () => void query.refetch() }, 'settings')
       ]
     })
   }
