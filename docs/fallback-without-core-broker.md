@@ -31,21 +31,34 @@ What the user sees instead:
   reason is inspectable instead of being a mystery tooltip;
 - once a build ships the broker, the same card fills in with no plugin update.
 
-## What would count as a secure fallback for Grok
+## Compatibility mode for OAuth providers (the actual fallback)
 
-Only these:
+On a build with no xAI broker route, the plugin can still read Grok usage through Hermes's
+**own locked sign-in path** rather than a token file:
 
-1. **Core broker** (the PR). Credential resolved by core, request made by core, token never
-   in plugin memory.
-2. **A user-run export**: the user produces a usage file with the vendor's own CLI, and points
-   the plugin at the file. The plugin reads data, not credentials. Not shipped because it
-   needs a stable vendor command and user setup to be worth the support cost.
-3. **The vendor dashboard link**, which is what the card shows today.
+- it calls `resolve_xai_oauth_runtime_credentials()`, the same resolver inference uses, so the
+  refresh happens under the store lock and cannot race or revoke the rotation chain;
+- it sends to `cli-chat-proxy.grok.com`, `grok.com` or `api.x.ai` only, HTTPS, no redirects,
+  no embedded credentials, and it refuses a caller-supplied `Authorization`, `Host` or
+  `Content-Length`;
+- the access token lives in one stack frame for the length of one request. It is never written,
+  logged, cached or returned, and the frame's references are cleared before it unwinds;
+- every failure becomes a message with the error's type name, never the token or the request.
 
-Rejected on purpose: reading token files, scraping HTML with a session cookie, proxying
-through a local helper that holds the grant, or shipping an endpoint that a blog mentioned
-but the vendor does not document. Each one moves the secret back into plugin code and turns a
-blank card into a silent security regression.
+It is **off by default** and enabled per profile with either:
+
+```json
+// $HERMES_HOME/provider-usage/settings.json
+{"compat_oauth_reads": true}
+```
+
+or `HERMES_PROVIDER_USAGE_COMPAT_OAUTH=1`. While it is off, the Grok card states that this
+build has no broker route and names the switch, instead of pretending the provider has no data.
+
+The honest difference from the core broker: with compatibility mode the token exists inside
+this process, which a code-owned broker avoids entirely. That is why it is opt-in and why the
+PR is still worth merging.
+
 
 ## Coverage of the wider provider list
 

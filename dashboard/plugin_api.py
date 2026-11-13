@@ -1477,8 +1477,10 @@ _GROK_SETTINGS = "https://cli-chat-proxy.grok.com/v1/settings"
 _GROK_BILLING_GRPC = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
 _GROK_UPGRADE_REASON = (
     "Grok subscription credits need a Hermes build that brokers xAI sign-in through "
-    "credentialed_provider_request. This build does not broker xAI, and the plugin never "
-    "reads the raw OAuth token. Manage the Grok plan at https://grok.com/dashboard."
+    "credentialed_provider_request. This build does not broker xAI. Compatibility mode is off: "
+    "set provider_usage.compat_oauth_reads (or HERMES_PROVIDER_USAGE_COMPAT_OAUTH=1) to read "
+    "through Hermes's own locked sign-in path instead. The plugin never reads the raw OAuth token. "
+    "Manage the Grok plan at https://grok.com/dashboard."
 )
 
 
@@ -1494,6 +1496,98 @@ class _XaiHTTPFailure(RuntimeError):
     """A non-auth provider HTTP failure; the credits proxy may still have the gRPC fallback."""
 
 
+# Compatibility mode: for Hermes builds with no xAI broker route, call core's own resolver
+# (the locked refresh path, never auth.json parsed here) and make the request from this
+# process. Off unless the user turns it on; nothing is written, logged, cached or returned.
+_GROK_HOSTS = frozenset({"cli-chat-proxy.grok.com", "grok.com", "api.x.ai"})
+_COMPAT_ENV = "HERMES_PROVIDER_USAGE_COMPAT_OAUTH"
+_COMPAT_SETTING = "compat_oauth_reads"
+
+
+class _CompatResponse:
+    """The fields the xAI readers use. Built from the response only, never from the request."""
+
+    __slots__ = ("status", "headers", "body")
+
+    def __init__(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        self.status, self.headers, self.body = status, headers, body
+
+    def json(self) -> Any:
+        try:
+            return json.loads(self.body)
+        except ValueError:
+            return None
+
+
+def _compat_enabled() -> bool:
+    """Opt-in switch: env var, or ``compat_oauth_reads`` in the profile's settings file."""
+    if os.getenv(_COMPAT_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        settings = json.loads((_hermes_home() / "provider-usage" / "settings.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(settings, dict) and settings.get(_COMPAT_SETTING) is True
+
+
+def _compat_xai_request(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    content: Optional[bytes] = None,
+    timeout: float = 15.0,
+) -> _CompatResponse:
+    """Use core's resolver and send one request, when the build has no broker route.
+
+    The access token lives in this frame for the duration of the call. It is never logged,
+    cached, persisted or returned, the host is checked here rather than trusted from the
+    caller, and every failure is rebuilt as a message with a type name only.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or host not in _GROK_HOSTS or parts.username or parts.password:
+        raise _XaiAuthFailure("Compatibility mode refuses a request outside xAI's own hosts.")
+
+    try:
+        from hermes_cli.auth_xai import resolve_xai_oauth_runtime_credentials
+    except ImportError:
+        raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+    try:
+        creds = resolve_xai_oauth_runtime_credentials()
+    except Exception as exc:  # AuthError, provider HTTP errors, a malformed store
+        raise _XaiAuthFailure(f"xAI sign-in could not be resolved ({type(exc).__name__}).") from None
+
+    token = str(creds.get("api_key") or "").strip()
+    if not token:
+        raise _XaiAuthFailure("No usable xai-oauth sign-in in this Hermes profile.")
+    send = {name: value for name, value in dict(headers or {}).items()
+            if name.lower() not in {"authorization", "host", "content-length"}}
+    send["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            response = client.request(method, url, headers=send, content=content)
+            return _CompatResponse(response.status_code, dict(response.headers), response.content)
+    except Exception as exc:
+        raise _XaiHTTPFailure(f"xAI request failed ({type(exc).__name__}).") from None
+    finally:
+        token = send = ""  # drop this frame's references before it unwinds
+
+
+def _xai_without_broker(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    content: Optional[bytes] = None,
+    timeout: float = 15.0,
+) -> Any:
+    """No broker route on this build: compatibility mode if the user opted in, else explain."""
+    if _compat_enabled():
+        return _compat_xai_request(method, url, headers=headers, content=content, timeout=timeout)
+    raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON)
+
+
 def _credentialed_xai_request(
     method: str,
     url: str,
@@ -1506,7 +1600,7 @@ def _credentialed_xai_request(
     try:
         from hermes_cli.plugin_provider_requests import ProviderNotSignedIn, credentialed_provider_request
     except ImportError:
-        raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+        return _xai_without_broker(method, url, headers=headers, content=content, timeout=timeout)
     kwargs: dict[str, Any] = {"headers": headers, "timeout": timeout}
     if content is not None:
         kwargs["content"] = content
@@ -1520,11 +1614,11 @@ def _credentialed_xai_request(
         # Older cores expose the helper without ``content=`` (the dbe0bcec
         # bytes-body seam). Do not fall through to a raw token; report upgrade.
         if "unexpected keyword argument" in str(exc):
-            raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+            return _xai_without_broker(method, url, headers=headers, content=content, timeout=timeout)
         raise
     except ValueError as exc:
         if "No signed-in requests for provider" in str(exc):
-            raise _XaiBrokerUnavailable(_GROK_UPGRADE_REASON) from None
+            return _xai_without_broker(method, url, headers=headers, content=content, timeout=timeout)
         raise
 
 
@@ -1990,7 +2084,7 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.2"
+_PLUGIN_VERSION = "0.10.3"
 #: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
 #: 25s and then renders "Usage unavailable" with no row at all, so the backend must
 #: answer inside that cap even when a provider hangs: unfinished providers become
