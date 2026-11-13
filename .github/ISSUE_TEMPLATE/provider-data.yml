@@ -1,0 +1,65 @@
+name: Provider data looks wrong or missing
+description: A provider is supported, but its usage, balance, or reset data is wrong, stale, or absent.
+title: "[provider] <provider id>: <what is wrong>"
+labels: ["provider-data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when Provider Usage shows the wrong number for a provider, or shows
+        **no data** where the provider does publish an account/usage API.
+
+        Do **not** paste API keys, OAuth tokens, cookies, or full request dumps. The
+        diagnostics block below already omits credentials; if you paste something and
+        realise it contains a secret, revoke it with the provider first.
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider id
+      description: The id shown in the pane or `hermes plugins` output, for example `deepseek` or `xai-oauth`.
+      placeholder: deepseek
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should it show, and where did you see that?
+      description: A link to the provider's developer docs, billing page, or support article that states the endpoint or the number. If the endpoint is not publicly documented, say so — an experimental label is a valid outcome.
+      placeholder: |
+        Docs: https://...
+        Expected: balance of $12.40 for this key
+        Shown instead: "no data"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste the output of the pane's Diagnostics action, or `GET /api/plugins/jg-provider-usage/diagnostics`. It lists each provider's state and failure reason, with no credentials.
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `hermes --version`, the plugin version from `hermes plugins show jg-provider-usage`, and your OS.
+      placeholder: hermes 0.23.1, plugin 0.10.1, Windows 11
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I did not include any API key, token, cookie, or password in this report.
+          required: true
+        - label: I checked PROVIDER_SUPPORT.md and this provider is not listed as "no account API".
+          required: true
+        - label: This is not a request to add a provider that publishes no usage API (those get an "unavailable" card instead).
+          required: false

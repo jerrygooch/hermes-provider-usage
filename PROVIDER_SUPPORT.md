@@ -155,6 +155,25 @@ released `0.23.1` baseline.
 
 The declarative path itself resolves credentials only through `agent.secret_scope.get_secret`; it never reads a credential from `os.environ`, `.env`, `auth.json`, vendor CLI credentials, or raw OAuth.
 
+## Reporting a provider
+
+Most providers publish no account API. AWS Bedrock has no balance endpoint; Gemini usage
+lives in Cloud Monitoring, outside an API key's scope; several OpenAI-compatible gateways
+only have a web dashboard. Those get an explicit **unavailable** card rather than a guessed
+number, and that is the correct outcome, not a bug.
+
+For everything else, the gap is fixable and the report path is built in:
+
+- `GET /diagnostics?provider=<id>` returns `report_url`, a prefilled issue form carrying
+  the provider id, this plugin's version, and the last refresh's per-provider reasons.
+  No credential is ever in it.
+- The form asks for a documentation or billing-page link. An endpoint that is real but
+  undocumented gets the **experimental** label, the same treatment Ollama Cloud already
+  has; an endpoint nobody can cite does not ship.
+
+Reports are triaged by outcome: **verified adapter**, **declarative definition** for a
+fixed read-only JSON endpoint, or **no account API** with the official dashboard linked.
+
 ## Adapter requirements
 
 A new provider adapter must:

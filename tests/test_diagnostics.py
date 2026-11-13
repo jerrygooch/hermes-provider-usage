@@ -6,6 +6,7 @@ rows, timings and failures. These assertions cover the seam itself, not a live a
 """
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -60,7 +61,7 @@ class DiagnosticsRouteTest(unittest.TestCase):
         payload = self.api.diagnostics()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["plugin"], "jg-provider-usage")
-        self.assertEqual(payload["version"], "0.10.1")
+        self.assertEqual(payload["version"], self.api._PLUGIN_VERSION)
         self.assertEqual(payload["deadline_s"], 18.0)
         self.assertIsNone(payload["last_overview"])
         self.assertIsInstance(payload["credentials"], dict)
@@ -89,6 +90,29 @@ class DiagnosticsRouteTest(unittest.TestCase):
         payload = self.api.diagnostics()
         payload["last_overview"]["providers"].append("mutated")
         self.assertEqual(self.api._LAST_OVERVIEW["providers"], ["deepseek"])
+
+    def test_diagnostics_offers_a_prefilled_report_form_for_the_provider(self):
+        url = self.api.diagnostics(provider="deepseek")["report_url"]
+        self.assertTrue(url.startswith("https://github.com/jerrygooch/hermes-provider-usage/issues/new?"))
+        self.assertIn("template=provider-data.yml", url)
+        self.assertIn("provider=deepseek", url)
+        self.assertIn(f"versions=plugin+{self.api._PLUGIN_VERSION}", url)
+
+    def test_report_url_carries_no_credential_or_query_injection(self):
+        url = self.api.diagnostics(provider="bad id&labels=evil")["report_url"]
+        self.assertEqual(url.count("labels="), 1)  # the caller's text is encoded into provider=, not a parameter
+        self.assertIn("provider=bad+id%26labels%3Devil", url)
+        self.assertNotIn("&labels=evil", url)
+
+    def test_diagnostics_says_whether_the_core_broker_reaches_this_provider(self):
+        block = self.api.diagnostics(provider="xai-oauth")["core_broker"]
+        self.assertIsInstance(block["available"], bool)
+        self.assertIsInstance(block["providers"], int)
+        self.assertIsInstance(block["xai"], bool)
+        # The point of the flag: a limited card is explainable as an upgrade, not a bug.
+        if block["available"] and not block["xai"]:
+            self.assertIn("xai-oauth", block["reason"])
+        self.assertNotIn("token", json.dumps(block).lower())
 
 
 class OverviewDeadlineTest(unittest.TestCase):

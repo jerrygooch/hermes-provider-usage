@@ -1990,7 +1990,7 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.1"
+_PLUGIN_VERSION = "0.10.2"
 #: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
 #: 25s and then renders "Usage unavailable" with no row at all, so the backend must
 #: answer inside that cap even when a provider hangs: unfinished providers become
@@ -4935,7 +4935,7 @@ def health() -> dict[str, Any]:
 
 
 @router.get("/diagnostics")
-def diagnostics() -> dict[str, Any]:
+def diagnostics(provider: str = "") -> dict[str, Any]:
     """What the last refresh actually did.
 
     Read-only and credential-free: row ids, per-provider timings and failure reasons,
@@ -4963,7 +4963,44 @@ def diagnostics() -> dict[str, Any]:
         "deadline_s": _OVERVIEW_DEADLINE_S,
         "last_overview": copy.deepcopy(_LAST_OVERVIEW) or None,
         "credentials": credentials,
+        "core_broker": _core_broker_capability(),
+        "report_url": _report_url(provider),
     }
+
+
+def _core_broker_capability() -> dict[str, Any]:
+    """What the running Hermes build can do for this plugin, in one credential-free line.
+
+    Older builds expose ``credentialed_provider_request`` with a Codex-only table, so a Grok
+    card that says "limited data" is an upgrade problem, not a bug and not a reason to read
+    the OAuth token. Report the shape, never the provider's secret.
+    """
+    try:
+        from hermes_cli.plugin_provider_requests import credentialed_providers
+    except ImportError:
+        return {"available": False, "providers": 0, "xai": False, "reason": "helper missing"}
+    try:
+        names = tuple(credentialed_providers())
+    except Exception as exc:  # a core bug must not take down diagnostics
+        return {"available": False, "providers": 0, "xai": False, "reason": type(exc).__name__}
+    return {"available": True, "providers": len(names), "xai": "xai-oauth" in names,
+            "reason": "" if "xai-oauth" in names else "core broker has no xai-oauth route"}
+
+
+#: Prefilled issue form. Field names match .github/ISSUE_TEMPLATE/provider-data.yml, so the
+#: reporter lands on the form with the provider and versions already filled in.
+_REPORT_REPO = "jerrygooch/hermes-provider-usage"
+
+
+def _report_url(provider: str = "") -> str:
+    from urllib.parse import urlencode
+
+    params = {"template": "provider-data.yml", "labels": "provider-data",
+              "versions": f"plugin {_PLUGIN_VERSION}"}
+    provider = str(provider or "").strip()
+    if provider:
+        params["provider"] = provider
+    return f"https://github.com/{_REPORT_REPO}/issues/new?{urlencode(params)}"
 
 
 def _clean_profile(value: Any) -> Optional[str]:
