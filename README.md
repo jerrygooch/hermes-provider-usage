@@ -47,12 +47,16 @@ If the bar is visible but the chip is not, check **Settings → Plugins** and co
 | OpenCode Zen | Authenticated API-credit product state; wallet balance stays unavailable because OpenCode does not expose it to API keys | Limited by the provider |
 | DeepSeek | API balance in the currency DeepSeek returns | Stock compatibility tests |
 | OpenRouter | Remaining API credit, key quota, and spend detail | Stock compatibility tests |
+| Novita | Available, cash, pending charges and credit limit, converted from the integer 1/10 000 units the API returns | Documented billing endpoint |
+| DeepInfra | Credit available vs amount due (DeepInfra reports a *negative* Stripe balance when funded), scoped credits, suspension and overdue invoices | Documented payment checklist |
+| Fireworks | Spend by line item for the last 30 days, in the currency Fireworks returns | Documented billing summary |
+| Arcee | Tokens, requests and models for the reporting window. Arcee reports no money, so no balance is invented | Documented usage summary |
 | Ollama Cloud | Session, weekly, and monthly windows plus per-model request counts | Experimental endpoint; plans differ |
 | Nous Portal | Portal credit snapshot when the installed Hermes runtime exposes it | Host-dependent |
 | Claude / Anthropic | Always-listed card. Claude subscription limits through the existing Claude Code OAuth read; Anthropic API Admin usage is a separate organization product and is not metered here | Subscription read uses the existing core adapter; card is fixture-tested, **not live-verified in this release** |
 | Google Gemini API | Always-listed **setup and capability card**: API-key setup and documented per-project rate limits. No supported account balance/quota endpoint, so usage stays in Google AI Studio | **Setup only; no account adapter and no live account test** |
 | Z.ai / GLM | Always-listed **setup and capability card**: GLM Coding Plan quota versus standard pay-as-you-go billing, with global and China endpoints. Hermes has no `zai` account-usage hook, so no quota or credit is invented | **Setup only; no account adapter and no live account test** |
-| xAI / Grok | On stock Hermes 0.23.1 there is no xAI broker, so the row is unavailable with the official Grok dashboard link. Subscription credits appear only when the host brokers `xai-oauth` | Stock: link only; broker is optional |
+| xAI / Grok | Subscription credits when the host brokers `xai-oauth`. On a build with no xAI broker the row offers the official Grok dashboard link, plus the opt-in **Compatibility: read Grok through Hermes's locked resolver** setting, which reads billing without the plugin ever holding the token | Stock: broker or opt-in compatibility mode; settings panel covered by tests, read proven live |
 | Declarative JSON | Any fixed read-only HTTPS usage or balance endpoint you describe with the bundled schema; GitHub rate limits ship ready to use | Tested boundary and GitHub live check |
 
 OpenCode is one family in the UI, but its products stay separate. **Go is subscription-funded. Zen is API-credit-funded.** They use different routes and credentials, and the plugin never treats one as the other's balance.
@@ -62,6 +66,19 @@ The **Claude / Anthropic**, **Google Gemini API**, and **Z.ai / GLM** cards are 
 The Grok billing response exposes quota data but no trustworthy plan-tier name, so the plugin uses the conservative label **SuperGrok** and does not infer a higher tier.
 
 See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, selection rules, and the exact stock/enhanced split in [docs/stock-support.md](docs/stock-support.md).
+
+## Settings
+
+**Provider Usage → Settings** is one allowlisted JSON file per profile
+(`$HERMES_HOME/provider-usage/settings.json`). The spec *is* the allowlist: a future
+preference is one entry, and the panel renders itself from it. Unknown keys and wrongly
+typed values are refused rather than coerced, and saving a read setting refetches usage
+instead of leaving stale numbers on screen.
+
+- `compat_oauth_reads` (off by default) — on a Hermes build with no xAI broker, read Grok
+  billing through core's locked OAuth resolver. It never opens a token file, and it
+  becomes inert once the broker can serve `xai-oauth`. Rationale and caveats:
+  [docs/fallback-without-core-broker.md](docs/fallback-without-core-broker.md).
 
 ## Reset credits, carefully
 

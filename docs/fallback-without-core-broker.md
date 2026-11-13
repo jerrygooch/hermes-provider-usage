@@ -50,6 +50,8 @@ It is **off by default** and enabled per profile with either:
 ```json
 // $HERMES_HOME/provider-usage/settings.json
 {"compat_oauth_reads": true}
+
+**Provider Usage → Settings** writes this file for you; editing it by hand is not required. Saving the switch refetches usage immediately, and the setting has no effect once the broker can serve `xai-oauth`.
 ```
 
 or `HERMES_PROVIDER_USAGE_COMPAT_OAUTH=1`. While it is off, the Grok card states that this
