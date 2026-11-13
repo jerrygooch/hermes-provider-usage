@@ -65,6 +65,8 @@ The **Claude / Anthropic**, **Google Gemini API**, and **Z.ai / GLM** cards are 
 
 The Grok billing response exposes quota data but no trustworthy plan-tier name, so the plugin uses the conservative label **SuperGrok** and does not infer a higher tier.
 
+Releases reach the Hermes catalogue through a pinned-SHA pull request; the [catalogue release checklist](docs/catalog-release.md) covers the validation gate, the pin bump (`scripts/bump_catalog.py`) and why nothing here self-updates.
+
 See [PROVIDER_SUPPORT.md](PROVIDER_SUPPORT.md) for tested capabilities, selection rules, and the exact stock/enhanced split in [docs/stock-support.md](docs/stock-support.md).
 
 ## Settings
