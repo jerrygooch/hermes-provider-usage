@@ -2201,7 +2201,12 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   const switching = useSwitchingOverride(scope.fetchProfile, ready)
   const backendGone = ready && Boolean(query.isError) && !row && isBackendNotEnabled(query.error)
   const refetchError = Boolean(query.isError) && Boolean(row)
-  const label = row ? compactProviderLabel(row) : 'Usage'
+  // A response can arrive without a row for the chat's provider (an unknown custom
+  // endpoint, a renamed id, or a provider the backend did not list). Saying only
+  // "unavailable" hides which side is wrong, so name the provider and what shipped.
+  const rowIds = matched ? (matched.providers || []).map(item => item?.id).filter(Boolean) : []
+  const missingRow = Boolean(matched) && Boolean(provider) && !row
+  const label = row ? compactProviderLabel(row) : missingRow ? compactProviderLabel({ id: provider }) : 'Usage'
 
   let summary = 'unavailable'
   if (switching) summary = 'switching'
@@ -2209,10 +2214,14 @@ function ActiveUsageChipBody({ ctx, model, sessionId, gateway, scope }) {
   else if (!provider && sessionId) summary = 'checking'
   else if (row) summary = statusFundingSummary(row, model)
   else if (ready && (query.isLoading || !matched)) summary = 'checking'
+  else if (missingRow) summary = 'no data'
   else if (ready) summary = 'unavailable'
   if (refetchError) summary = `${summary} · not refreshed`
 
-  const description = chipDescription(row, model, matched, switching, ready, refetchError, scope, backendGone)
+  const description = missingRow
+    ? `${provider} is not in this response (it reports: ${rowIds.join(', ') || 'no providers'}). Open Provider usage for the full list.`
+    : chipDescription(row, model, matched, switching, ready, refetchError, scope, backendGone)
+
   const Icon = state.kind === 'balance' ? icons.CreditCard : icons.Activity
   // Controlled so "View all providers" dismisses the popover as the page opens.
   const [popoverOpen, setPopoverOpen] = useState(false)

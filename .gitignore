@@ -18,3 +18,6 @@ config.yaml
 .idea/
 .DS_Store
 Thumbs.db
+
+# Runtime cache written by the vendor-page refresh during local runs
+dashboard/vendor_page_cache.json

@@ -1990,7 +1990,26 @@ def _direct_ollama_cloud() -> Optional[dict[str, Any]]:
 
 _DEFINITION_SCHEMA = "hermes.provider-usage.definition/1"
 _DEFINITION_APPROVAL_SCHEMA = "hermes.provider-usage.approvals/1"
-_PLUGIN_VERSION = "0.10.0"
+_PLUGIN_VERSION = "0.10.1"
+#: Wall-clock budget for one /overview fan-out. The desktop aborts a plugin request at
+#: 25s and then renders "Usage unavailable" with no row at all, so the backend must
+#: answer inside that cap even when a provider hangs: unfinished providers become
+#: explicit slow rows instead of costing the whole response.
+_OVERVIEW_DEADLINE_S = 18.0
+#: Last completed overview, for GET /diagnostics. No credential, no row content —
+#: only ids, timings, failures and the profile that was read.
+_LAST_OVERVIEW: dict[str, Any] = {}
+
+
+def _failure_summary(exc: BaseException) -> str:
+    """One log-safe line for a failed provider read: type plus a bounded message.
+
+    Never includes headers, tokens or response bodies — the message is passed through
+    the same redaction used for the user-facing reason.
+    """
+    detail = _safe_request_error(exc)
+    return f"{type(exc).__name__}: {detail}"[:300]
+
 _DEFINITION_MAX_BYTES = 512 * 1024
 _DEFINITION_TIMEOUT_SECS = 10.0
 _DEFINITION_TOTAL_TIMEOUT_SECS = 20.0
@@ -4915,6 +4934,38 @@ def health() -> dict[str, Any]:
     return {"ok": True, "plugin": "jg-provider-usage", "version": _PLUGIN_VERSION}
 
 
+@router.get("/diagnostics")
+def diagnostics() -> dict[str, Any]:
+    """What the last refresh actually did.
+
+    Read-only and credential-free: row ids, per-provider timings and failure reasons,
+    plus whether this profile's keys resolve through the host's secret scope. A chip
+    that reads "Usage unavailable" with no reason is undiagnosable from the UI, and
+    the host log only shows what the backend writes — so the backend writes this.
+    """
+    credentials: dict[str, Any] = {}
+    try:
+        from agent.secret_scope import get_secret
+    except Exception as exc:  # a host without the secret API: say so, never fall back to os.environ
+        credentials["secret_scope"] = f"unavailable ({type(exc).__name__})"
+    else:
+        for name in ("DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_API_KEY"):
+            try:
+                value = get_secret(name)
+            except Exception as exc:
+                credentials[name] = f"raised {type(exc).__name__}"
+            else:
+                credentials[name] = "present" if isinstance(value, str) and value else "missing"
+    return {
+        "ok": True,
+        "plugin": "jg-provider-usage",
+        "version": _PLUGIN_VERSION,
+        "deadline_s": _OVERVIEW_DEADLINE_S,
+        "last_overview": copy.deepcopy(_LAST_OVERVIEW) or None,
+        "credentials": credentials,
+    }
+
+
 def _clean_profile(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     if not text or text.lower() in {"current", "active"}:
@@ -5195,29 +5246,70 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
 
     supported = [item["id"] for item in inventory if item.get("supported") and not item.get("definition")]
     supported.extend(item["id"] for item in inventory if item.get("definition") and item["id"] in ready)
+    timings: dict[str, Optional[float]] = {}
+    failures: dict[str, str] = {}
+    started = time.monotonic()
     if supported:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(supported))) as executor:
-            futures = {
-                executor.submit(copy_context().run, _fetch_inventory_provider, provider, ready, profile): provider
-                for provider in supported
-            }
-            for future in concurrent.futures.as_completed(futures):
-                provider = futures[future]
-                try:
-                    row = future.result()
-                except Exception as exc:
-                    definition = (ready.get(provider) or {}).get("definition")
-                    if definition is not None:
-                        row = _unavailable_definition_row(
-                            definition,
-                            state="unavailable",
-                            reason=_safe_request_error(exc),
-                            profile=profile,
+        deadline = started + _OVERVIEW_DEADLINE_S
+        pending: dict[concurrent.futures.Future[Any], str] = {}
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(supported)))
+        try:
+            for provider in supported:
+                pending[executor.submit(copy_context().run, _fetch_inventory_provider, provider, ready, profile)] = provider
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, _pending = concurrent.futures.wait(
+                    list(pending), timeout=remaining, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                if not done:
+                    break
+                for future in done:
+                    provider = pending.pop(future)
+                    completed = time.monotonic()
+                    try:
+                        row = future.result()
+                        timings[provider] = round((completed - started) * 1000, 1)
+                    except Exception as exc:
+                        definition = (ready.get(provider) or {}).get("definition")
+                        if definition is not None:
+                            row = _unavailable_definition_row(
+                                definition,
+                                state="unavailable",
+                                reason=_safe_request_error(exc),
+                                profile=profile,
+                            )
+                        else:
+                            row = _unavailable(provider, _safe_request_error(exc))
+                        timings[provider] = round((completed - started) * 1000, 1)
+                        # A provider that failed must say so in the host log: a blank
+                        # "unavailable" row with only a debug line is how a real
+                        # outage hides for days.
+                        failures[provider] = _failure_summary(exc)
+                        log.warning(
+                            "provider-usage: %s read failed after %.0fms (%s)",
+                            provider, timings[provider], failures[provider],
                         )
-                    else:
-                        row = _unavailable(provider, _safe_request_error(exc))
-                    log.debug("provider-usage %s failed", provider, exc_info=True)
+                        log.debug("provider-usage %s failed", provider, exc_info=True)
+                    rows[provider] = row
+            # Anything still running at the deadline becomes an explicit slow row
+            # instead of a request the desktop aborts at its own 25s cap.
+            for future, provider in list(pending.items()):
+                definition = (ready.get(provider) or {}).get("definition")
+                reason = f"{_PROVIDER_LABELS.get(provider, provider)} did not answer within {_OVERVIEW_DEADLINE_S:g}s."
+                if definition is not None:
+                    row = _unavailable_definition_row(definition, state="unavailable", reason=reason, profile=profile)
+                else:
+                    row = _unavailable(provider, reason)
                 rows[provider] = row
+                timings[provider] = None
+                failures[provider] = reason
+                log.warning("provider-usage: %s still running at the %gs deadline", provider, _OVERVIEW_DEADLINE_S)
+        finally:
+            # Never hold the response open for a stuck worker; its own HTTP timeout
+            # bounds it and the row is already reported as slow.
+            executor.shutdown(wait=False, cancel_futures=True)
 
     cache_stats = _cache_stats()
     providers = []
@@ -5264,6 +5356,30 @@ def _overview_scoped(body: dict[str, Any], profile: Optional[str]) -> dict[str, 
     except Exception:
         pass
     active_provider = requested_provider or default_provider or (providers[0]["id"] if providers else "")
+    duration_ms = round((time.monotonic() - started) * 1000)
+    unavailable_ids = [item["id"] for item in providers if item.get("available") is False]
+    _LAST_OVERVIEW.clear()
+    _LAST_OVERVIEW.update({
+        "at": _now(),
+        "profile": profile or "default",
+        "duration_ms": duration_ms,
+        "providers": [item["id"] for item in providers],
+        "unavailable": unavailable_ids,
+        "failures": dict(failures),
+        "timings_ms": dict(timings),
+        "active_provider": active_provider,
+    })
+    # One line per refresh: enough to tell "nobody asked" apart from "every read failed"
+    # without turning the host log into a firehose.
+    log.info(
+        "provider-usage overview profile=%s rows=%d unavailable=%d duration_ms=%d slow=%s failures=%s",
+        profile or "default",
+        len(providers),
+        len(unavailable_ids),
+        duration_ms,
+        ",".join(f"{k}={v}ms" for k, v in timings.items() if v is None) or "none",
+        "; ".join(f"{k}: {v}" for k, v in failures.items())[:400] or "none",
+    )
     return {
         "version": 1,
         "definitions_version": 1,
